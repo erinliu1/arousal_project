@@ -92,6 +92,25 @@ def get_mclogs(base_dir, participant, run):
             run_number = int(match.group(1))
             if run_number == target_run_number:
                 return os.path.join(folder, file)
+
+def get_sleep_scoring_mat_files(base_dir, participant, run):
+    """Return every sleep-scoring MAT file belonging to this run.
+
+    The source folder also contains hypnograms and event annotations.  Those
+    are intentionally not copied here: the existing nicks_data layout keeps
+    only the MATLAB EEG files in each run's sleep_scoring folder.
+    """
+    target_run_number = int(re.match(r'run(.*)', run).group(1))
+    folder = os.path.join(base_dir, participant, 'eeg', 'gac', 'sleep_scoring')
+    if not os.path.isdir(folder):
+        return []
+
+    mat_files = []
+    for file in sorted(os.listdir(folder)):
+        match = re.match(r'^r0*(\d+)_.*\.mat$', file)
+        if match and int(match.group(1)) == target_run_number:
+            mat_files.append(os.path.join(folder, file))
+    return mat_files
             
 def copy_paste(src, participant, run, new_filename, subfolder=None):
     run_number = int(re.match(r'run(.*)', run).group(1))
@@ -101,7 +120,9 @@ def copy_paste(src, participant, run, new_filename, subfolder=None):
     os.makedirs(dest_folder, exist_ok=True)
     shutil.copy2(src, os.path.join(dest_folder, new_filename))
  
-def copy_nicks_data(mclogs=True, buttonpresses=True, rois=True, parcelate_cortex=True, parcelate_thalamus=True):
+def copy_nicks_data(mclogs=True, buttonpresses=True, rois=True,
+                    parcelate_cortex=True, parcelate_thalamus=True,
+                    sleep_scoring=True):
     base_dir = '/orcd/data/ldlewis/001/om2/ncicero/AAN'
     for participant in get_participants(base_dir):
         runs = get_runs(base_dir, participant)
@@ -127,6 +148,16 @@ def copy_nicks_data(mclogs=True, buttonpresses=True, rois=True, parcelate_cortex
                 thalamus_rois_dict = get_thalamic_parcelations(participant, run)
                 for roi_name, roi_file in thalamus_rois_dict.items():
                     copy_paste(roi_file, participant, run, f'{roi_name}.txt', subfolder='thalamus')
+            if sleep_scoring:
+                sleep_scoring_files = get_sleep_scoring_mat_files(base_dir, participant, run)
+                for sleep_scoring_file in sleep_scoring_files:
+                    copy_paste(
+                        sleep_scoring_file,
+                        participant,
+                        run,
+                        os.path.basename(sleep_scoring_file),
+                        subfolder='sleep_scoring',
+                    )
 
 def check_all_rois_present(all_rois):
     base_dir = '/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/nicks_data'
@@ -184,6 +215,11 @@ def check_all_thalamus_parcelations_present():
                 print(f'Participant: {participant}, Run: {run}, Missing Thalamus Parcelations: {sorted(list(missing_rois))}')
 
 if __name__ == "__main__":
-    copy_nicks_data(mclogs=False, buttonpresses=False, rois=False, parcelate_cortex=False, parcelate_thalamus=True)
+    # Copying all sleep-scoring MAT files is approximately 11 GB.  Run this
+    # explicitly when the nicks_data copy needs to be recreated:
+    # copy_nicks_data(mclogs=False, buttonpresses=False, rois=False,
+    #                 parcelate_cortex=False, parcelate_thalamus=False,
+    #                 sleep_scoring=True)
+    pass
     # check_all_cortex_parcelations_present()
     # check_all_thalamus_parcelations_present()
