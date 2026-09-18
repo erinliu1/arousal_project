@@ -2,12 +2,7 @@
 
 import os
 import numpy as np
-from all_rois import (
-    all_rois,
-    all_cortical_rois,
-    all_thalamic_rois,
-    get_all_rois_with_cortical_and_thalamic,
-)
+from all_rois import all_rois, aan_rois, cortical_rois, thalamic_rois
 
 NICKS_DIR = '/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/nicks_data'
 RAW_DATA_DIR = '/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/raw_data'
@@ -106,17 +101,36 @@ def get_valid_thalamic_ROIs(nicks_dir=NICKS_DIR):
     return sorted(list(all_thalamus_rois))
 
 def roi_dict_lookup(roi_type):
+    if roi_type == 'aan':
+        return aan_rois
+    if roi_type == 'cortex':
+        return cortical_rois
+    if roi_type == 'thalamus':
+        return thalamic_rois
     if roi_type == 'all':
         return all_rois
-    if roi_type == 'cortex':
-        return all_cortical_rois
-    if roi_type == 'thalamus':
-        return all_thalamic_rois
     raise ValueError(f'Invalid roi_type: {roi_type}')
+
+def roi_type_for_roi(roi):
+    if roi in aan_rois:
+        return 'aan'
+    if roi in cortical_rois:
+        return 'cortex'
+    if roi in thalamic_rois:
+        return 'thalamus'
+    raise ValueError(f'Invalid ROI: {roi}')
+
+def roi_filepath(nicks_dir, participant, run, roi_type, roi):
+    source_roi = 'ostralmiddlefrontal' if roi == 'rostralmiddlefrontal' else roi
+    resolved_type = roi_type_for_roi(roi) if roi_type == 'all' else roi_type
+    return os.path.join(
+        filepath_lookup(nicks_dir, participant, run, resolved_type),
+        f'{source_roi}.txt',
+    )
 
 def filepath_lookup(nicks_dir, participant, run, roi_type):
     # Return the folder path under /nicks_data containing the specified category of roi time series.
-    if roi_type == 'all':
+    if roi_type == 'aan':
         return os.path.join(nicks_dir, participant, run)
     if roi_type == 'cortex':
         return os.path.join(nicks_dir, participant, run, 'cortex')
@@ -128,22 +142,17 @@ def save_rois(participant, run, nicks_dir=NICKS_DIR, raw_data_dir=RAW_DATA_DIR):
     save_folder = os.path.join(raw_data_dir, participant, run, 'rois')
     os.makedirs(save_folder, exist_ok=True)
 
-    for roi_type in ['all', 'cortex', 'thalamus']:
+    for roi_type in ['aan', 'cortex', 'thalamus']:
         for roi in roi_dict_lookup(roi_type):
-            source_roi = 'ostralmiddlefrontal' if roi == 'rostralmiddlefrontal' else roi
-            roi_path = os.path.join(
-                filepath_lookup(nicks_dir, participant, run, roi_type),
-                f'{source_roi}.txt',
-            )
+            roi_path = roi_filepath(nicks_dir, participant, run, roi_type, roi)
             roi_data = load_txt_boi(roi_path)
             np.save(os.path.join(save_folder, f'{roi}.npy'), roi_data)
 
 def save_time_vector(participant, run, TR=0.98, raw_data_dir=RAW_DATA_DIR):
     save_folder = os.path.join(raw_data_dir, participant, run)
     roi_folder = os.path.join(save_folder, 'rois')
-    all_roi_names = get_all_rois_with_cortical_and_thalamic()
     all_roi_TR_lengths = []
-    for roi in all_roi_names:
+    for roi in all_rois:
         roi_path = os.path.join(roi_folder, f'{roi}.npy')
         if not os.path.exists(roi_path):
             print(f'ROI file {roi_path} does not exist for {participant} {run}.')
@@ -153,7 +162,7 @@ def save_time_vector(participant, run, TR=0.98, raw_data_dir=RAW_DATA_DIR):
     if len(set(all_roi_TR_lengths)) > 1:
         print(
             f'Warning: ROIs have different lengths for {participant} {run}:\n '
-            f'{dict(zip(all_roi_names, all_roi_TR_lengths))}'
+            f'{dict(zip(all_rois, all_roi_TR_lengths))}'
         )
         return
     T = all_roi_TR_lengths[0]
