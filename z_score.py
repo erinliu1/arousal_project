@@ -103,7 +103,7 @@ def plot_stds_vs_k(trials, ks=[0,1,2,3,4,5,6], roi_type='all'):
     plt.title(f'Average Median % STD Change vs k Transition for {roi_type.title()} ROIs')
     save_path = os.path.join('plots', 'z_score')
     os.makedirs(save_path, exist_ok=True)
-    plt.savefig('plots/z_score/std_v_k.png')
+    plt.savefig(os.path.join(save_path, 'std_v_k.png'), dpi=300)
     plt.close()
 
 # plot_stds_vs_k([('AAN_06', 'run01'), ('AAN_18', 'run04'), ('AAN_20', 'run01'), ('AAN_10', 'run02')], roi_type='all')
