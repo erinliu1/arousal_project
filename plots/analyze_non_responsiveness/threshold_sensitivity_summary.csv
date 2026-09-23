@@ -1,0 +1,5 @@
+threshold,n_events,n_participants,n_runs,median_events_per_participant,median_events_per_run,median_events_per_contributing_participant,median_events_per_contributing_run
+15,876,18,47,23.0,9.5,29.5,14.0
+20,612,17,45,15.0,8.0,19.0,10.0
+25,473,17,42,11.5,6.0,15.0,10.0
+30,388,16,41,8.0,5.0,13.5,9.0

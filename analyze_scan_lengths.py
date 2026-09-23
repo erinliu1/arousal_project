@@ -4,10 +4,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 RAW_DATA = Path('/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/raw_data')
+SAVE_PATH = Path('plots/analyze_scan_lengths')
+SAVE_PATH.mkdir(parents=True, exist_ok=True)
 
-def get_scan_lengths(raw_data_dir=RAW_DATA):
+def get_scan_lengths():
     scan_lengths = []
-    for participant_dir in sorted(raw_data_dir.iterdir()):
+    for participant_dir in sorted(RAW_DATA.iterdir()):
         if not participant_dir.is_dir():
             continue
         participant = participant_dir.name
@@ -31,12 +33,11 @@ def get_scan_lengths(raw_data_dir=RAW_DATA):
                 'bps_length': bps[-1],
                 'eeg_length': eeg_t[-1]
             })
+    df = pd.DataFrame(scan_lengths)
+    df.to_csv(SAVE_PATH / 'scan_lengths.csv', index=False)
+    return df
 
-    return scan_lengths
-
-def plot_scan_lengths():
-    scan_lengths = get_scan_lengths()
-    scan_lengths_df = pd.DataFrame(scan_lengths)
+def plot_scan_lengths(scan_lengths_df):
 
     fig, ax = plt.subplots(figsize=(27, 7))
     bar_width = 0.25
@@ -118,12 +119,11 @@ def plot_scan_lengths():
     ax.spines['right'].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(Path('plots') / 'scan_lengths.png', dpi=300, bbox_inches='tight')
+    plt.savefig(SAVE_PATH / 'scan_lengths.png', dpi=300, bbox_inches='tight')
 
 if __name__ == '__main__':
     # which participant-runs where EEG length is less than fMRI length?
-    # scan_lengths = get_scan_lengths()
-    # scan_lengths_df = pd.DataFrame(scan_lengths)
+    # scan_lengths_df = get_scan_lengths()
     # print(scan_lengths_df[scan_lengths_df['eeg_length'] >= scan_lengths_df['fMRI_length']])
     
     # which participant-runs are missing any of the three lengths?
@@ -134,4 +134,4 @@ if __name__ == '__main__':
     # print(f"Runs missing at least one: {n_missing}")
     # print(f"Total runs: {len(scan_lengths_df)}")
 
-    # plot_scan_lengths()
+    # plot_scan_lengths(scan_lengths_df)

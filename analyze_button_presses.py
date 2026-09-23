@@ -6,11 +6,14 @@ from matplotlib.ticker import FuncFormatter
 
 RAW_DATA = Path('/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/raw_data')
 
-def get_button_press_intervals(raw_data_dir=RAW_DATA, snap_to_TRs=True, save_path=Path('plots')):
+SAVE_PATH = Path('plots/analyze_button_presses')
+SAVE_PATH.mkdir(parents=True, exist_ok=True)
+
+def get_button_press_intervals(snap_to_TRs=True):
     button_press_intervals = []
     no_bp_intervals = []
     end_bp_intervals = []
-    for participant_dir in sorted(raw_data_dir.iterdir()):
+    for participant_dir in sorted(RAW_DATA.iterdir()):
         if not participant_dir.is_dir():
             continue
         participant = participant_dir.name
@@ -61,15 +64,14 @@ def get_button_press_intervals(raw_data_dir=RAW_DATA, snap_to_TRs=True, save_pat
                             'interval': end_interval
                         })
 
-    if save_path:
-        button_press_intervals_df = pd.DataFrame(button_press_intervals)
-        button_press_intervals_df.to_csv(save_path / 'button_press_intervals.csv', index=False)
+    button_press_intervals_df = pd.DataFrame(button_press_intervals)
+    button_press_intervals_df.to_csv(SAVE_PATH / 'bp_intervals.csv', index=False)
 
-        no_bp_intervals_df = pd.DataFrame(no_bp_intervals)
-        no_bp_intervals_df.to_csv(save_path / 'no_button_press_intervals.csv', index=False)
+    no_bp_intervals_df = pd.DataFrame(no_bp_intervals)
+    no_bp_intervals_df.to_csv(SAVE_PATH / 'no_bp_intervals.csv', index=False)
 
-        end_bp_intervals_df = pd.DataFrame(end_bp_intervals)
-        end_bp_intervals_df.to_csv(save_path / 'end_button_press_intervals.csv', index=False)
+    end_bp_intervals_df = pd.DataFrame(end_bp_intervals)
+    end_bp_intervals_df.to_csv(SAVE_PATH / 'end_bp_intervals.csv', index=False)
 
     return button_press_intervals, no_bp_intervals, end_bp_intervals
 
@@ -156,10 +158,27 @@ def scatter_bp_intervals(log_scale=False, snap_to_TRs=True):
             FuncFormatter(lambda y, _: f'{y:,.0f}')
         )
 
-    save_name = 'button_press_intervals_log.png' if log_scale else 'button_press_intervals.png'
+    save_name = 'bp_intervals_log.png' if log_scale else 'bp_intervals.png'
     plt.tight_layout()
-    plt.savefig(Path('plots') / save_name, dpi=300, bbox_inches='tight')
+    plt.savefig(SAVE_PATH / save_name, dpi=300, bbox_inches='tight')
     plt.close()
+
+def calculate_participant_interval_stats():
+    # for each participant, calculate median, 25, 75, 90, 95, and 99 percentiles across all bp intervals
+    button_press_intervals, _, _ = get_button_press_intervals(snap_to_TRs=True)
+    participant_bp_intervals = pd.DataFrame(button_press_intervals) 
+    stats_df = participant_bp_intervals[['participant']].copy()
+
+    stats_df['median'] = participant_bp_intervals['intervals'].apply(np.median)
+    stats_df['25'] = participant_bp_intervals['intervals'].apply(lambda x: np.percentile(x, 25))
+    stats_df['75'] = participant_bp_intervals['intervals'].apply(lambda x: np.percentile(x, 75))
+    stats_df['90'] = participant_bp_intervals['intervals'].apply(lambda x: np.percentile(x, 90))
+    stats_df['95'] = participant_bp_intervals['intervals'].apply(lambda x: np.percentile(x, 95))
+    stats_df['99'] = participant_bp_intervals['intervals'].apply(lambda x: np.percentile(x, 99))
+    
+    stats_df.to_csv(SAVE_PATH / 'bp_interval_stats.csv', index=False)
+    return stats_df
 
 if __name__ == '__main__':
     scatter_bp_intervals(log_scale=True, snap_to_TRs=True)
+    calculate_participant_interval_stats()
