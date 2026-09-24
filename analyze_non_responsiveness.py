@@ -8,6 +8,8 @@ from matplotlib.ticker import MaxNLocator
 SAVE_PATH = Path('plots/analyze_non_responsiveness')
 SAVE_PATH.mkdir(parents=True, exist_ok=True)
 
+RAW_DATA = Path('raw_data')
+
 def get_participant_bp_intervals(button_press_intervals_df):
     # pool across all participants, so each row represents one participant and a list of all their button press intervals across all runs in a list (columns = 'participant', 'intervals')
     return button_press_intervals_df.groupby('participant')['interval'].apply(list).reset_index().rename(columns={'interval': 'intervals'})
@@ -511,9 +513,255 @@ def plot_run_counts_vs_threshold(sensitivity_summary):
     plt.show()
     plt.close()
 
+def get_non_responsive_segments(threshold=20):
+    """Extract and save all forms of run-level non-responsive segments.
+
+    Consecutive valid, unique button-press TRs define each candidate segment.
+    Runs with zero or one press also contribute a whole-run star segment, while
+    the gap from the final press to the final recorded TR contributes an X
+    segment. Only durations meeting ``threshold`` are retained.
+    """
+    segments = []
+    whole_runs = []
+    end_segments = []
+
+    participant_dirs = sorted(
+        (path for path in RAW_DATA.iterdir() if path.is_dir()),
+        key=lambda path: int(path.name.split('_')[-1])
+    )
+
+    for participant_dir in participant_dirs:
+        run_dirs = sorted(
+            (path for path in participant_dir.iterdir() if path.is_dir()),
+            key=lambda path: int(''.join(filter(str.isdigit, path.name)))
+        )
+
+        for run_dir in run_dirs:
+            time_vector = np.load(run_dir / 'time_vector.npy')
+            bp_TRs = np.load(run_dir / 'bp_TRs.npy')
+            bp_TRs = np.unique(bp_TRs[bp_TRs < len(time_vector)])
+            last_TR = len(time_vector) - 1
+
+            if len(bp_TRs) <= 1 and last_TR >= threshold:
+                whole_runs.append({
+                    'participant': participant_dir.name,
+                    'run': run_dir.name,
+                    'start_TR': 0,
+                    'end_TR': last_TR,
+                    'duration_TRs': last_TR
+                })
+
+            if len(bp_TRs) >= 2:
+                interval_starts = bp_TRs[:-1]
+                interval_ends = bp_TRs[1:]
+                durations = np.diff(bp_TRs)
+                qualifying = durations >= threshold
+
+                for epoch, (start_TR, end_TR, duration_TRs) in enumerate(
+                    zip(
+                        interval_starts[qualifying],
+                        interval_ends[qualifying],
+                        durations[qualifying]
+                    ),
+                    start=1
+                ):
+                    segments.append({
+                        'participant': participant_dir.name,
+                        'run': run_dir.name,
+                        'epoch': epoch,
+                        'start_TR': int(start_TR),
+                        'end_TR': int(end_TR),
+                        'duration_TRs': int(duration_TRs)
+                    })
+
+            if len(bp_TRs) >= 1:
+                end_duration = int(last_TR - bp_TRs[-1])
+                if end_duration >= threshold:
+                    end_segments.append({
+                        'participant': participant_dir.name,
+                        'run': run_dir.name,
+                        'start_TR': int(bp_TRs[-1]),
+                        'end_TR': last_TR,
+                        'duration_TRs': end_duration
+                    })
+
+    columns = [
+        'participant',
+        'run',
+        'epoch',
+        'start_TR',
+        'end_TR',
+        'duration_TRs'
+    ]
+    segments_df = pd.DataFrame(segments, columns=columns)
+    segments_df.to_csv(SAVE_PATH / 'non_responsive_segments.csv', index=False)
+
+    auxiliary_columns = [
+        'participant',
+        'run',
+        'start_TR',
+        'end_TR',
+        'duration_TRs'
+    ]
+    whole_runs_df = pd.DataFrame(
+        whole_runs,
+        columns=auxiliary_columns
+    )
+    end_segments_df = pd.DataFrame(
+        end_segments,
+        columns=auxiliary_columns
+    )
+    whole_runs_df.to_csv(
+        SAVE_PATH / 'non_responsive_whole_runs.csv',
+        index=False
+    )
+    end_segments_df.to_csv(
+        SAVE_PATH / 'non_responsive_end_segments.csv',
+        index=False
+    )
+
+    return segments_df, whole_runs_df, end_segments_df
+
+
+def scatter_non_responsive_segments(threshold=20):
+    """Scatter long button-press intervals for every participant and run.
+
+    Each interval at or above ``threshold`` is treated as a non-responsive
+    segment and plotted at its run's x position. The x-axis is built from all
+    run directories so runs without qualifying segments retain empty slots.
+    """
+    non_responsive_df, whole_runs_df, end_segments_df = get_non_responsive_segments(threshold=threshold)
+
+    # Inventory runs independently of qualifying intervals so empty runs are
+    # represented by an x-axis position with no marker.
+    run_rows = []
+    for participant_dir in RAW_DATA.iterdir():
+        if not participant_dir.is_dir():
+            continue
+        for run_dir in participant_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            run_rows.append({
+                'participant': participant_dir.name,
+                'run': run_dir.name
+            })
+
+    run_inventory = pd.DataFrame(run_rows)
+    if run_inventory.empty:
+        print('No participant runs to plot.')
+        return
+
+    run_inventory['participant_num'] = (
+        run_inventory['participant'].str.split('_').str[-1].astype(int)
+    )
+    run_inventory['run_num'] = (
+        run_inventory['run'].str.extract(r'(\d+)')[0].astype(int)
+    )
+    run_inventory = run_inventory.sort_values(
+        ['participant_num', 'run_num']
+    ).reset_index(drop=True)
+
+    participants = run_inventory['participant'].unique()
+    colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
+    participant_colors = dict(zip(participants, colors))
+
+    fig, ax = plt.subplots(figsize=(27, 9))
+
+    x = 0
+    participant_centers = []
+    participant_labels = []
+
+    for participant_idx, (participant, participant_df) in enumerate(
+        run_inventory.groupby('participant', sort=False)
+    ):
+        participant_xs = []
+        color = participant_colors[participant]
+
+        for run_idx, (_, run_row) in enumerate(participant_df.iterrows()):
+            run_segments = non_responsive_df[
+                (non_responsive_df['participant'] == participant) &
+                (non_responsive_df['run'] == run_row['run'])
+            ]
+            run_whole_runs = whole_runs_df[
+                (whole_runs_df['participant'] == participant) &
+                (whole_runs_df['run'] == run_row['run'])
+            ]
+            run_end_segments = end_segments_df[
+                (end_segments_df['participant'] == participant) &
+                (end_segments_df['run'] == run_row['run'])
+            ]
+
+            if not run_segments.empty:
+                ax.scatter(
+                    np.full(len(run_segments), x),
+                    run_segments['duration_TRs'],
+                    alpha=0.7,
+                    s=180,
+                    color=color
+                )
+
+            if not run_whole_runs.empty:
+                ax.scatter(
+                    np.full(len(run_whole_runs), x),
+                    run_whole_runs['duration_TRs'],
+                    marker='*',
+                    alpha=0.7,
+                    s=220,
+                    color=color,
+                    linewidths=2
+                )
+
+            if not run_end_segments.empty:
+                ax.scatter(
+                    np.full(len(run_end_segments), x),
+                    run_end_segments['duration_TRs'],
+                    marker='x',
+                    alpha=0.7,
+                    s=180,
+                    color=color,
+                    linewidths=2
+                )
+
+            participant_xs.append(x)
+            if run_idx < len(participant_df) - 1:
+                ax.axvline(x + 0.5, color='lightgray', linewidth=2)
+            x += 1
+
+        participant_centers.append(np.mean(participant_xs))
+        participant_labels.append(
+            participant_df['participant_num'].iloc[0]
+        )
+
+        if participant_idx < len(participants) - 1:
+            ax.axvline(x - 0.5, color='gray', linewidth=3, alpha=0.6)
+
+    ax.set_xticks(participant_centers)
+    ax.set_xticklabels(participant_labels, fontsize=22)
+
+    ax.tick_params(axis='x', width=2, length=8)
+    ax.tick_params(axis='y', which='both', length=0, labelsize=22)
+
+    ax.set_xlabel('Participant', fontsize=32, labelpad=15)
+    ax.set_ylabel('Non-responsive Segment Duration (TRs)', fontsize=32, labelpad=15)
+    ax.set_title(
+        f'Non-responsive Segments ≥ {threshold} TRs by Participant and Run',
+        fontsize=34,
+        fontweight='bold'
+    )
+
+    ax.spines['left'].set_linewidth(2)
+    ax.spines['bottom'].set_linewidth(2)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(SAVE_PATH / f'non_responsive_segments_T{threshold}.png', dpi=300, bbox_inches='tight')
+    plt.close()
+
 if __name__ == '__main__':
-    # button_press_intervals = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
-    # button_press_intervals_df = pd.DataFrame(button_press_intervals)
+    scatter_non_responsive_segments(threshold=20)
+    pass
+    # button_press_intervals_df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
     # participant_run_bp_intervals = get_participant_run_bp_intervals(button_press_intervals_df)
     # participant_bp_intervals = get_participant_bp_intervals(button_press_intervals_df)
     

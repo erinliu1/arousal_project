@@ -146,12 +146,11 @@ def main(nicks_dir=nicks_dir, my_dir=my_dir):
         for run in sorted(os.listdir(os.path.join(nicks_dir, participant))):
             bps = load_bps(participant, run, data_dir=nicks_dir)
             bp_TRs = load_nearest_preceding_TR(bps)
-
             save_dir = os.path.join(my_dir, participant, run)
             os.makedirs(save_dir, exist_ok=True)
             np.save(os.path.join(save_dir, 'bps.npy'), bps)
             np.save(os.path.join(save_dir, 'bp_TRs.npy'), bp_TRs)
             print(f'Processed {participant} {run}')
 
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
