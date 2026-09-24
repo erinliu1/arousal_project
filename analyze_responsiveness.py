@@ -589,14 +589,14 @@ def plot_responsive_windows(window_size=30, step_size=10, min_density=0.25, max_
 
 plot_responsive_windows()
 
-RESPONSIVE_SEGMENTS_PATH = SAVE_PATH / 'responsive_segments'
-RESPONSIVE_SEGMENTS_PATH.mkdir(parents=True, exist_ok=True)
+RESPONSIVE_INTERVALS_PATH = SAVE_PATH / 'responsive_intervals'
+RESPONSIVE_INTERVALS_PATH.mkdir(parents=True, exist_ok=True)
 
-def get_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_gap=5):
+def get_responsive_intervals(window_size=30, step_size=10, min_density=0.25, max_gap=5):
     # merge overlapping or touching windows geometrically
     df = get_responsive_windows(window_size=window_size, step_size=step_size, min_density=min_density, max_gap=max_gap)
 
-    segments = []
+    intervals = []
     for (participant, run), run_df in df.groupby(["participant", "run"]):
         responsive_df = run_df[run_df["responsive"]].sort_values("start_TR").reset_index(drop=True)
         if len(responsive_df) == 0:
@@ -620,7 +620,7 @@ def get_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_
                 # Save previous responsive segment
                 epoch_windows = pd.DataFrame(current_windows)
 
-                segments.append({
+                intervals.append({
                     "participant": participant,
                     "run": run,
                     "epoch": epoch_num,
@@ -643,7 +643,7 @@ def get_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_
         # Save final segment
         epoch_windows = pd.DataFrame(current_windows)
 
-        segments.append({
+        intervals.append({
             "participant": participant,
             "run": run,
             "epoch": epoch_num,
@@ -655,12 +655,12 @@ def get_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_
             "min_response_density": epoch_windows["response_density"].min(),
             "max_within_window_gap": epoch_windows["max_within_window_gap"].max(),
         })
-    segments_df = pd.DataFrame(segments)
-    segments_df.to_csv(RESPONSIVE_SEGMENTS_PATH / "responsive_segments.csv", index=False)
-    return segments_df
+    intervals_df = pd.DataFrame(intervals)
+    intervals_df.to_csv(RESPONSIVE_INTERVALS_PATH / "responsive_intervals.csv", index=False)
+    return intervals_df
 
-def summarize_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_gap=5):
-    df = get_responsive_segments()
+def summarize_responsive_intervals(window_size=30, step_size=10, min_density=0.25, max_gap=5):
+    df = get_responsive_intervals()
 
     if len(df) == 0:
         return df
@@ -676,17 +676,17 @@ def summarize_responsive_segments(window_size=30, step_size=10, min_density=0.25
         )
         .reset_index()
     )
-    summary.to_csv(RESPONSIVE_SEGMENTS_PATH / "responsive_segments_summary.csv", index=False)
+    summary.to_csv(RESPONSIVE_INTERVALS_PATH / "responsive_intervals_summary.csv", index=False)
     return summary
 
-def scatter_responsive_segments(window_size=30, step_size=10, min_density=0.25, max_gap=5):
+def scatter_responsive_intervals(window_size=30, step_size=10, min_density=0.25, max_gap=5):
     """Scatter responsive-segment durations for each participant and run.
 
-    All segments from a run share one x position, participant labels are
+    All intervals from a run share one x position, participant labels are
     centered beneath their runs, and colors distinguish participants. The
-    completed figure is saved in ``RESPONSIVE_SEGMENTS_PATH``.
+    completed figure is saved in ``RESPONSIVE_INTERVALS_PATH``.
     """
-    df = get_responsive_segments(
+    df = get_responsive_intervals(
         window_size=window_size,
         step_size=step_size,
         min_density=min_density,
@@ -694,7 +694,7 @@ def scatter_responsive_segments(window_size=30, step_size=10, min_density=0.25, 
     )
 
     # Build the x-axis from every run on disk, not just runs represented in the
-    # segment table. This preserves an empty slot when a run has no segments.
+    # segment table. This preserves an empty slot when a run has no intervals.
     run_rows = []
     for participant_dir in RAW_DATA.iterdir():
         if not participant_dir.is_dir():
@@ -740,33 +740,33 @@ def scatter_responsive_segments(window_size=30, step_size=10, min_density=0.25, 
 
         for run_idx, (_, run_row) in enumerate(participant_df.iterrows()):
             if df.empty:
-                run_segments = df
+                run_intervals = df
             else:
-                run_segments = df[
+                run_intervals = df[
                     (df['participant'] == participant) &
                     (df['run'] == run_row['run'])
                 ]
 
-            positive_segments = run_segments[
-                run_segments['duration_TRs'] > 0
-            ] if not run_segments.empty else run_segments
-            zero_segments = run_segments[
-                run_segments['duration_TRs'] == 0
-            ] if not run_segments.empty else run_segments
+            positive_intervals = run_intervals[
+                run_intervals['duration_TRs'] > 0
+            ] if not run_intervals.empty else run_intervals
+            zero_intervals = run_intervals[
+                run_intervals['duration_TRs'] == 0
+            ] if not run_intervals.empty else run_intervals
 
-            if not positive_segments.empty:
+            if not positive_intervals.empty:
                 ax.scatter(
-                    np.full(len(positive_segments), x),
-                    positive_segments['duration_TRs'],
+                    np.full(len(positive_intervals), x),
+                    positive_intervals['duration_TRs'],
                     alpha=0.7,
                     s=180,
                     color=color
                 )
 
-            if not zero_segments.empty:
+            if not zero_intervals.empty:
                 ax.scatter(
-                    np.full(len(zero_segments), x),
-                    zero_segments['duration_TRs'],
+                    np.full(len(zero_intervals), x),
+                    zero_intervals['duration_TRs'],
                     marker='*',
                     alpha=0.7,
                     s=220,
@@ -795,9 +795,9 @@ def scatter_responsive_segments(window_size=30, step_size=10, min_density=0.25, 
     ax.tick_params(axis='y', which='both', length=0, labelsize=22)
 
     ax.set_xlabel('Participant', fontsize=32, labelpad=15)
-    ax.set_ylabel('Responsive Segment Duration (TRs)', fontsize=32, labelpad=15)
+    ax.set_ylabel('Responsive Interval Duration (TRs)', fontsize=32, labelpad=15)
     ax.set_title(
-        'Responsive Segment Durations by Participant and Run',
+        'Responsive Interval Durations by Participant and Run',
         fontsize=34,
         fontweight='bold'
     )
@@ -809,10 +809,10 @@ def scatter_responsive_segments(window_size=30, step_size=10, min_density=0.25, 
 
     plt.tight_layout()
     plt.savefig(
-        RESPONSIVE_SEGMENTS_PATH / 'responsive_segments.png',
+        RESPONSIVE_INTERVALS_PATH / 'responsive_intervals.png',
         dpi=300,
         bbox_inches='tight'
     )
     plt.close()
 
-# scatter_responsive_segments()
+scatter_responsive_intervals()
