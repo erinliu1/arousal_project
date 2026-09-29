@@ -348,13 +348,11 @@ def get_response_density(window_size=30):
             time_vector = np.load(run_dir / 'time_vector.npy')
             bp_TRs = np.load(run_dir / 'bp_TRs.npy')
 
-            bp_TRs = bp_TRs[bp_TRs < len(time_vector)]
-            bp_TRs = np.unique(bp_TRs)
-
-            n_TRs = len(time_vector)
+            bp_TRs = np.unique(bp_TRs[
+                (bp_TRs >= 20) & (bp_TRs < len(time_vector))])
 
             # only full windows
-            for start_TR in range(0, n_TRs - window_size + 1, window_size):
+            for start_TR in range(20, len(time_vector) - window_size + 1, window_size):
                 end_TR = start_TR + window_size
                 n_presses = np.sum((bp_TRs >= start_TR) & (bp_TRs < end_TR))
                 density = n_presses / window_size
@@ -407,11 +405,10 @@ def get_response_density_overlapping(window_size=30, step_size=10):
             time_vector = np.load(run_dir / 'time_vector.npy')
             bp_TRs = np.load(run_dir / 'bp_TRs.npy')
 
-            bp_TRs = bp_TRs[bp_TRs < len(time_vector)]
-            bp_TRs = np.unique(bp_TRs)
+            bp_TRs = np.unique(bp_TRs[
+                (bp_TRs >= 20) & (bp_TRs < len(time_vector))])
 
-            n_TRs = len(time_vector)
-            for start_TR in range(0, n_TRs - window_size + 1, step_size):
+            for start_TR in range(20, len(time_vector) - window_size + 1, step_size):
                 end_TR = start_TR + window_size
                 n_presses = np.sum((bp_TRs >= start_TR) & (bp_TRs < end_TR))
                 rows.append({
@@ -455,8 +452,8 @@ def get_responsive_windows(window_size=30, step_size=10, min_density=0.25, max_g
         time_vector = np.load(run_dir / "time_vector.npy")
         bp_TRs = np.load(run_dir / "bp_TRs.npy")
 
-        bp_TRs = bp_TRs[bp_TRs < len(time_vector)]
-        bp_TRs = np.unique(bp_TRs)
+        bp_TRs = np.unique(bp_TRs[
+                (bp_TRs >= 20) & (bp_TRs < len(time_vector))])
 
         # count button presses inside this window
         window_bps = bp_TRs[(bp_TRs >= start_TR) &(bp_TRs < end_TR)]
@@ -587,8 +584,6 @@ def plot_responsive_windows(window_size=30, step_size=10, min_density=0.25, max_
     plt.savefig(RESPONSIVE_WINDOWS_PATH / 'responsive_windows.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-plot_responsive_windows()
-
 RESPONSIVE_INTERVALS_PATH = SAVE_PATH / 'responsive_intervals'
 RESPONSIVE_INTERVALS_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -660,7 +655,7 @@ def get_responsive_intervals(window_size=30, step_size=10, min_density=0.25, max
     return intervals_df
 
 def summarize_responsive_intervals(window_size=30, step_size=10, min_density=0.25, max_gap=5):
-    df = get_responsive_intervals()
+    df = get_responsive_intervals(window_size=window_size, step_size=step_size, min_density=min_density, max_gap=max_gap)
 
     if len(df) == 0:
         return df
@@ -815,4 +810,7 @@ def scatter_responsive_intervals(window_size=30, step_size=10, min_density=0.25,
     )
     plt.close()
 
-scatter_responsive_intervals()
+if __name__ == "__main__":
+    plot_responsive_windows()
+    summarize_responsive_intervals()
+    scatter_responsive_intervals()

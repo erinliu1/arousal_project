@@ -514,13 +514,19 @@ def plot_run_counts_vs_threshold(sensitivity_summary):
     plt.close()
 
 def get_non_responsive_intervals(threshold=20):
-    """Extract and save all forms of run-level non-responsive intervals.
-
-    Consecutive valid, unique button-press TRs define each candidate interval.
-    Runs with zero or one press also contribute a whole-run star interval, while
-    the gap from the final press to the final recorded TR contributes an X
-    interval. Only durations meeting ``threshold`` are retained.
     """
+    Extract all forms of run-level non-responsive intervals.
+
+    Behavioral non-responsiveness is defined using the original button-presses. The first 20 TRs are then excluded from the usable fMRI domain.
+
+    Consecutive valid, unique button-press TRs define bounded candidate
+    intervals. Runs with zero button presses contribute a whole-run interval,
+    while the gap from the final press to the end of the run contributes an
+    end interval.
+
+    Only behavioral gaps meeting `threshold` whose usable post-startup
+    portion also meets `threshold` are retained.
+    """    
     intervals = []
     whole_runs = []
     end_intervals = []
@@ -539,89 +545,94 @@ def get_non_responsive_intervals(threshold=20):
         for run_dir in run_dirs:
             time_vector = np.load(run_dir / 'time_vector.npy')
             bp_TRs = np.load(run_dir / 'bp_TRs.npy')
+
             bp_TRs = np.unique(bp_TRs[bp_TRs < len(time_vector)])
-            last_TR = len(time_vector) - 1
-
-            if len(bp_TRs) <= 1 and last_TR >= threshold:
-                whole_runs.append({
-                    'participant': participant_dir.name,
-                    'run': run_dir.name,
-                    'start_TR': 0,
-                    'end_TR': last_TR,
-                    'duration_TRs': last_TR
-                })
-
-            if len(bp_TRs) >= 2:
+            
+            if len(bp_TRs) == 0: # no button presses, whole run is non-responsive
+                run_duration_TRs = len(time_vector) - 20
+                if run_duration_TRs >= threshold:
+                    whole_runs.append({
+                        'participant': participant_dir.name,
+                        'run': run_dir.name,
+                        'start_TR': 20,
+                        'end_TR': len(time_vector), # exclusive
+                        'duration_TRs': run_duration_TRs
+                    })
+                
+            if len(bp_TRs) >= 2: # at least two button presses, so there are intervals between them
                 interval_starts = bp_TRs[:-1]
                 interval_ends = bp_TRs[1:]
                 durations = np.diff(bp_TRs)
                 qualifying = durations >= threshold
 
-                for epoch, (start_TR, end_TR, duration_TRs) in enumerate(
-                    zip(
-                        interval_starts[qualifying],
-                        interval_ends[qualifying],
-                        durations[qualifying]
-                    ),
-                    start=1
+                for start_TR, end_TR, duration_TRs in zip(
+                    interval_starts[qualifying], 
+                    interval_ends[qualifying], 
+                    durations[qualifying]
                 ):
+                    clipped_start = max(int(start_TR), 20)
+                    clipped_end = end_TR
+                    usable_duration = clipped_end - clipped_start
+
+                    if usable_duration < threshold:
+                        continue
+
                     intervals.append({
                         'participant': participant_dir.name,
                         'run': run_dir.name,
-                        'epoch': epoch,
-                        'start_TR': int(start_TR),
-                        'end_TR': int(end_TR),
-                        'duration_TRs': int(duration_TRs)
+                        'start_TR': clipped_start,
+                        'end_TR': clipped_end, # exclusive
+                        'duration_TRs': usable_duration
                     })
 
-            if len(bp_TRs) >= 1:
-                end_duration = int(last_TR - bp_TRs[-1])
-                if end_duration >= threshold:
+            if len(bp_TRs) >= 1: # end intervals from last button press to end of run
+                last_bp_TR = bp_TRs[-1]
+                behavioral_duration = len(time_vector) - last_bp_TR
+                usable_start_TR = max(last_bp_TR, 20)
+                usable_duration = len(time_vector) - usable_start_TR
+                if behavioral_duration >= threshold and usable_duration >= threshold:
                     end_intervals.append({
                         'participant': participant_dir.name,
                         'run': run_dir.name,
-                        'start_TR': int(bp_TRs[-1]),
-                        'end_TR': last_TR,
-                        'duration_TRs': end_duration
+                        'start_TR': usable_start_TR,
+                        'end_TR': len(time_vector), # exclusive
+                        'duration_TRs': usable_duration
                     })
 
-    columns = [
-        'participant',
-        'run',
-        'epoch',
-        'start_TR',
-        'end_TR',
-        'duration_TRs'
-    ]
+    columns = ['participant', 'run', 'start_TR', 'end_TR', 'duration_TRs']
     intervals_df = pd.DataFrame(intervals, columns=columns)
     intervals_df.to_csv(SAVE_PATH / 'non_responsive_intervals.csv', index=False)
+    
+    whole_runs_df = pd.DataFrame(whole_runs, columns=columns)
+    whole_runs_df.to_csv(SAVE_PATH / 'non_responsive_whole_runs.csv', index=False)
 
-    auxiliary_columns = [
-        'participant',
-        'run',
-        'start_TR',
-        'end_TR',
-        'duration_TRs'
-    ]
-    whole_runs_df = pd.DataFrame(
-        whole_runs,
-        columns=auxiliary_columns
-    )
-    end_intervals_df = pd.DataFrame(
-        end_intervals,
-        columns=auxiliary_columns
-    )
-    whole_runs_df.to_csv(
-        SAVE_PATH / 'non_responsive_whole_runs.csv',
-        index=False
-    )
-    end_intervals_df.to_csv(
-        SAVE_PATH / 'non_responsive_end_intervals.csv',
-        index=False
-    )
+    end_intervals_df = pd.DataFrame(end_intervals, columns=columns)
+    end_intervals_df.to_csv(SAVE_PATH / 'non_responsive_end_intervals.csv', index=False)
 
     return intervals_df, whole_runs_df, end_intervals_df
 
+
+def get_all_participants():
+    return  pd.DataFrame({
+        "participant": [
+            path.name
+            for path in RAW_DATA.iterdir()
+            if path.is_dir()
+        ]
+    })
+
+def get_participant_colors():
+    participants = sorted(
+        [
+            path.name
+            for path in RAW_DATA.iterdir()
+            if path.is_dir()
+        ],
+        key=lambda participant: int(participant.split("_")[-1])
+    )
+
+    colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
+    return dict(zip(participants, colors))
 
 def scatter_non_responsive_intervals(threshold=20):
     """Scatter long button-press intervals for every participant and run.
@@ -661,9 +672,8 @@ def scatter_non_responsive_intervals(threshold=20):
         ['participant_num', 'run_num']
     ).reset_index(drop=True)
 
-    participants = run_inventory['participant'].unique()
-    colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
-    participant_colors = dict(zip(participants, colors))
+    participants = get_all_participants()['participant'].unique()
+    participant_colors = get_participant_colors()
 
     fig, ax = plt.subplots(figsize=(27, 9))
 
@@ -742,7 +752,7 @@ def scatter_non_responsive_intervals(threshold=20):
     ax.tick_params(axis='y', which='both', length=0, labelsize=22)
 
     ax.set_xlabel('Participant', fontsize=32, labelpad=15)
-    ax.set_ylabel('Non-responsive Interval Duration (TRs)', fontsize=32, labelpad=15)
+    ax.set_ylabel('Non-responsive Interval Duration (TRs)', fontsize=30, labelpad=15)
     ax.set_title(
         f'Non-responsive Intervals ≥ {threshold} TRs by Participant and Run',
         fontsize=34,
@@ -755,11 +765,73 @@ def scatter_non_responsive_intervals(threshold=20):
     ax.spines['right'].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(SAVE_PATH / f'non_responsive_intervals_T{threshold}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(SAVE_PATH / f'non_responsive_intervals.png', dpi=300, bbox_inches='tight')
     plt.close()
+
+def plot_non_responsive_segment_counts(threshold=20):
+    non_responsive_df, _, _ = get_non_responsive_intervals(threshold=threshold)
+    all_participants = get_all_participants()
+    participant_colors = get_participant_colors()
+    participants = get_all_participants()['participant'].unique()
+
+    observed_counts = (
+        non_responsive_df
+        .groupby("participant")
+        .size()
+        .reset_index(name="n_events")
+    )
+    participant_counts = (
+        all_participants
+        .merge(observed_counts, on="participant", how="left")
+        .fillna({"n_events": 0})
+    )
+    participant_counts["n_events"] = participant_counts["n_events"].astype(int)
+
+    participant_counts = participant_counts.sort_values("n_events", ascending=False).copy()
+    participant_counts['participant_num'] = participant_counts['participant'].str.split('_').str[-1].astype(int)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    bar_colors = [participant_colors[p] for p in participant_counts["participant"]]
+
+    bars = ax.bar(participant_counts["participant_num"].astype(str), participant_counts["n_events"] , color=bar_colors)
+
+    for bar in bars:
+        height = bar.get_height()
+
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            height,
+            f"{int(height)}",
+            ha="center",
+            va="bottom",
+        )
+
+    ax.set_xlabel("Participant")
+    ax.set_ylabel(f"Number of BP intervals ≥ {threshold} TRs")
+    ax.set_title(f"Non-responsive BP intervals per participant ≥ {threshold}-TR threshold")
+
+    ax.tick_params(axis="x")
+
+    plt.tight_layout()
+    plt.savefig(SAVE_PATH / f"non_responsive_intervals_per_participant.png", dpi=300)
+    plt.show()
+    plt.close()
+
+def print_non_responsive_summary(threshold=20):
+    non_responsive_df, whole_runs_df, end_intervals_df = get_non_responsive_intervals(threshold=threshold)
+
+    total_intervals = len(non_responsive_df)
+    total_whole_runs = len(whole_runs_df)
+    total_end_intervals = len(end_intervals_df)
+
+    print(f"Total non-responsive intervals ≥ {threshold} TRs: {total_intervals}")
+    print(f"Total whole-run non-responsive intervals ≥ {threshold} TRs: {total_whole_runs}")
+    print(f"Total end non-responsive intervals ≥ {threshold} TRs: {total_end_intervals}")
 
 if __name__ == '__main__':
     scatter_non_responsive_intervals(threshold=20)
+    plot_non_responsive_segment_counts(threshold=20)
+    print_non_responsive_summary(threshold=20)
     pass
     # button_press_intervals_df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
     # participant_run_bp_intervals = get_participant_run_bp_intervals(button_press_intervals_df)
