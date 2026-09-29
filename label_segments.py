@@ -242,7 +242,42 @@ def label_responsive_segments(segment_length=10, buffer=10):
     print(f"{segments_df[['participant', 'run']].drop_duplicates().shape[0]} runs")
 
     return segments_df
-    
+
+def plot_segment_counts_by_participant():
+    responsive = pd.read_csv(SAVE_PATH / "responsive_10TR_segments.csv")
+    non_responsive = pd.read_csv(SAVE_PATH / "non_responsive_10TR_segments.csv")
+    participant_numbers = pd.Index(range(1, 22), name="participant_num")
+
+    def counts_by_participant(segments):
+        participant_num = segments["participant"].str.extract(r"(\d+)")[0].astype(int)
+        return participant_num.value_counts().reindex(participant_numbers, fill_value=0).sort_index()
+
+    responsive_counts = counts_by_participant(responsive)
+    non_responsive_counts = counts_by_participant(non_responsive)
+    x = np.arange(1, 22)
+    width = 0.4
+
+    fig, ax = plt.subplots(figsize=(16, 7))
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color="lightgray", linewidth=0.8, alpha=0.6)
+    for separator in np.arange(1.5, 21, 1):
+        ax.axvline(separator, color="lightgray", linewidth=0.8, zorder=0)
+    ax.bar(x - width / 2, responsive_counts, width, color="#9ADF8C", edgecolor='black', linewidth=1, label="Responsive")
+    ax.bar(x + width / 2, non_responsive_counts, width, color="pink", edgecolor='black', linewidth=1, label="Non-responsive")
+    ax.set_xlabel("Participant", fontsize=22)
+    ax.set_ylabel("Number of segments", fontsize=22)
+    ax.set_title("Responsive and Non-responsive Segments per Participant", fontsize=28)
+    ax.set_xticks(x)
+    ax.set_xticklabels(x, fontsize=18)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.legend(fontsize=18)
+    plt.tight_layout()
+    plt.savefig(SAVE_PATH / "segment_counts_by_participant.png", dpi=300)
+    plt.close()
+
+
+
 if __name__ == "__main__":
-    label_non_responsive_segments()
-    label_responsive_segments()
+    # label_non_responsive_segments()
+    # label_responsive_segments()
+    plot_segment_counts_by_participant()

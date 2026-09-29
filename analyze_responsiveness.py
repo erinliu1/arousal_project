@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from analyze_non_responsiveness import get_participant_run_bp_intervals, get_participant_bp_intervals
+from analyze_non_responsiveness import (
+    get_all_participants,
+    get_participant_bp_intervals,
+    get_participant_colors,
+    get_participant_run_bp_intervals,
+)
 
 SAVE_PATH = Path('plots/analyze_responsiveness')
 SAVE_PATH.mkdir(parents=True, exist_ok=True)
@@ -810,7 +815,45 @@ def scatter_responsive_intervals(window_size=30, step_size=10, min_density=0.25,
     )
     plt.close()
 
+def plot_responsive_interval_counts(window_size=30, step_size=10, min_density=0.25, max_gap=5):
+    responsive_df = get_responsive_intervals(
+        window_size=window_size,
+        step_size=step_size,
+        min_density=min_density,
+        max_gap=max_gap,
+    )
+    all_participants = get_all_participants()
+    participant_colors = get_participant_colors()
+    observed_counts = (
+        responsive_df.groupby("participant").size().reset_index(name="n_events")
+        if not responsive_df.empty
+        else pd.DataFrame(columns=["participant", "n_events"])
+    )
+    participant_counts = all_participants.merge(observed_counts, on="participant", how="left").fillna({"n_events": 0})
+    participant_counts["n_events"] = participant_counts["n_events"].astype(int)
+    participant_counts["participant_num"] = participant_counts["participant"].str.split("_").str[-1].astype(int)
+    participant_counts = participant_counts.sort_values("n_events", ascending=False)
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    bars = ax.bar(
+        participant_counts["participant_num"].astype(str),
+        participant_counts["n_events"],
+        color=[participant_colors[p] for p in participant_counts["participant"]],
+    )
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, height, f"{int(height)}", ha="center", va="bottom")
+
+    ax.set_xlabel("Participant")
+    ax.set_ylabel("Number of responsive intervals")
+    ax.set_title("Responsive intervals per participant")
+    plt.tight_layout()
+    plt.savefig(RESPONSIVE_INTERVALS_PATH / "responsive_intervals_per_participant.png", dpi=300)
+    plt.show()
+    plt.close()
+
 if __name__ == "__main__":
-    plot_responsive_windows()
-    summarize_responsive_intervals()
-    scatter_responsive_intervals()
+    # plot_responsive_windows()
+    # summarize_responsive_intervals()
+    # scatter_responsive_intervals()
+    plot_responsive_interval_counts()

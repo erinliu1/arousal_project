@@ -768,7 +768,7 @@ def scatter_non_responsive_intervals(threshold=20):
     plt.savefig(SAVE_PATH / f'non_responsive_intervals.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_non_responsive_segment_counts(threshold=20):
+def plot_non_responsive_interval_counts(threshold=20):
     non_responsive_df, _, _ = get_non_responsive_intervals(threshold=threshold)
     all_participants = get_all_participants()
     participant_colors = get_participant_colors()
@@ -830,7 +830,7 @@ def print_non_responsive_summary(threshold=20):
 
 if __name__ == '__main__':
     scatter_non_responsive_intervals(threshold=20)
-    plot_non_responsive_segment_counts(threshold=20)
+    plot_non_responsive_interval_counts(threshold=20)
     print_non_responsive_summary(threshold=20)
     pass
     # button_press_intervals_df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
