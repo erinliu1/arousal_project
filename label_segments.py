@@ -246,6 +246,8 @@ def label_responsive_segments(segment_length=10, buffer=10):
 def plot_segment_counts_by_participant():
     responsive = pd.read_csv(SAVE_PATH / "responsive_10TR_segments.csv")
     non_responsive = pd.read_csv(SAVE_PATH / "non_responsive_10TR_segments.csv")
+    responsive = responsive[~responsive["contains_motion"].astype(str).str.lower().eq("true")]
+    non_responsive = non_responsive[~non_responsive["contains_motion"].astype(str).str.lower().eq("true")]
     participant_numbers = pd.Index(range(1, 22), name="participant_num")
 
     def counts_by_participant(segments):
@@ -266,7 +268,7 @@ def plot_segment_counts_by_participant():
     ax.bar(x + width / 2, non_responsive_counts, width, color="pink", edgecolor='black', linewidth=1, label="Non-responsive")
     ax.set_xlabel("Participant", fontsize=22)
     ax.set_ylabel("Number of segments", fontsize=22)
-    ax.set_title("Responsive and Non-responsive Segments per Participant", fontsize=28)
+    ax.set_title("Motion-free Responsive and Non-responsive Segments per Participant", fontsize=28)
     ax.set_xticks(x)
     ax.set_xticklabels(x, fontsize=18)
     ax.tick_params(axis="y", labelsize=18)
@@ -274,8 +276,6 @@ def plot_segment_counts_by_participant():
     plt.tight_layout()
     plt.savefig(SAVE_PATH / "segment_counts_by_participant.png", dpi=300)
     plt.close()
-
-
 
 if __name__ == "__main__":
     # label_non_responsive_segments()
