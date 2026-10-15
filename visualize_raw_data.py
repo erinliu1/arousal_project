@@ -2,9 +2,8 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 from framewise_displacement import framewise_displacement
-from load_bp_and_arousals import load_no_bp_intervals
+from arousal_processing import load_no_bp_intervals
 
 AAN_rois = ['LC', 'DR', 'MnR', 'mRt', 'PAG', 'PnO', 'PTg', 'VTA', 'BasalForebrain', 'POA', 'LH']
 

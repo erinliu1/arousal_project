@@ -754,7 +754,7 @@ def scatter_non_responsive_intervals(threshold=20):
     ax.set_xlabel('Participant', fontsize=32, labelpad=15)
     ax.set_ylabel('Non-responsive Interval Duration (TRs)', fontsize=30, labelpad=15)
     ax.set_title(
-        f'Non-responsive Intervals ≥ {threshold} TRs by Participant and Run',
+        'Non-responsive Interval Durations by Participant and Run',
         fontsize=34,
         fontweight='bold'
     )

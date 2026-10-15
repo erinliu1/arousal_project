@@ -1,0 +1,2 @@
+mean_train_accuracy,mean_test_accuracy,responsive_test_accuracy_pct,nonresponsive_test_accuracy_pct,mean_n_training_segments
+0.9955154021987591,0.6667773810512331,61.641845259716675,70.9193819795013,4593.5
