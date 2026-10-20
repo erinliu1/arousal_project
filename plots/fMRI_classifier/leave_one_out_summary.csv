@@ -1,0 +1,3 @@
+leave_out_type,class_balanced,participant_balanced,pooled_train_accuracy,pooled_test_accuracy,responsive_recall,nonresponsive_recall,balanced_test_accuracy
+participant,True,True,0.9814567973533436,0.6231005563397825,0.558844896476571,0.6772219672632707,0.6180334318699208
+run,True,True,0.9804321400228416,0.7012372332475297,0.6670904467853251,0.7299984702462904,0.6985444585158078

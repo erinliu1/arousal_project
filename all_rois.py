@@ -5,4 +5,6 @@ cortical_rois = ['caudalanteriorcingulate', 'caudalmiddlefrontal', 'cuneus', 'en
 
 thalamic_rois = ['AV', 'CM', 'LD', 'MD', 'PUL', 'VA', 'VLa', 'VLp', 'VPL']
 
-all_rois = aan_rois + cortical_rois + thalamic_rois
+motor_regions = ['postcentral', 'precentral']
+
+all_rois = [roi for roi in (aan_rois + cortical_rois + thalamic_rois) if roi not in motor_regions]
