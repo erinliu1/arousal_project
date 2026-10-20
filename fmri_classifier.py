@@ -18,11 +18,11 @@ from all_rois import all_rois
 
 # Change these globals, then run this file. ANALYSIS can be:
 # "segment_cv", "loro", "lopo", "buffer", or "blocked_buffer".
-ANALYSIS = "lopo"
+ANALYSIS = "loro"
 BUFFER_TR = None # only used for "buffer" and "blocked_buffer" analyses
-RUN_TRAINING = True
+RUN_TRAINING = False
 MAKE_PROBABILITY_PLOTS = True
-REBUILD_SEGMENT_ARRAYS = True
+REBUILD_SEGMENT_ARRAYS = False
 # Turn on one sampling option at a time. Class-balanced takes precedence if both are True.
 PARTICIPANT_CLASS_BALANCED_SAMPLING = True
 PARTICIPANT_BALANCED_SAMPLING = False
@@ -417,9 +417,29 @@ def plot_probability_by_run():
 
     for (participant, run), run_df in predictions.groupby(["participant", "run"], sort=False):
         run_df = run_df.sort_values("segment_start_TR")
-        motion_TRs = np.load(RAW_DATA_DIR / participant / run / "motion_TRs.npy")
+        run_dir = RAW_DATA_DIR / participant / run
+        motion_TRs = np.load(run_dir / "motion_TRs.npy")
+        press_times = np.sort(np.load(run_dir / "bps.npy"))
+        time_vector = np.load(run_dir / "time_vector.npy")
+        tr_seconds = float(np.median(np.diff(time_vector)))
+        window_seconds = 10 * tr_seconds
+        half_window = window_seconds / 2
+        window_starts = time_vector - half_window
+        window_ends = time_vector + half_window
+        press_counts = (
+            np.searchsorted(press_times, window_ends, side="left")
+            - np.searchsorted(press_times, window_starts, side="left")
+        )
+        press_rate_hz = press_counts / window_seconds
+        time_TRs = time_vector / tr_seconds
         midpoint = (run_df["segment_start_TR"] + run_df["segment_end_TR_exclusive"]) / 2
-        fig, (probability_ax, label_ax) = plt.subplots(2, 1, figsize=(12, 5), sharex=True, gridspec_kw={"height_ratios": [4, 1], "hspace": 0.08})
+        fig, (probability_ax, label_ax, press_rate_ax) = plt.subplots(
+            3,
+            1,
+            figsize=(12, 6.5),
+            sharex=True,
+            gridspec_kw={"height_ratios": [4, 1, 1.5], "hspace": 0.08},
+        )
         fig.subplots_adjust(left=0.14, right=0.98, top=0.84, bottom=0.13)
         probability_ax.plot(midpoint, run_df["probability_nonresponsive"], color="0.65", linewidth=1)
         probability_ax.scatter(midpoint, run_df["probability_nonresponsive"], c=run_df["label"].map(colors), s=24, edgecolor="white", linewidth=0.35)
@@ -427,7 +447,7 @@ def plot_probability_by_run():
         probability_ax.set(ylim=(-0.03, 1.03), ylabel="P(non-responsive)", title=f"{participant} | {run}")
         probability_ax.grid(axis="y", alpha=0.2)
         for motion_TR in motion_TRs:
-            for ax in (probability_ax, label_ax):
+            for ax in (probability_ax, label_ax, press_rate_ax):
                 ax.axvline(motion_TR, color="0.35", linestyle=":", linewidth=1, alpha=0.7, zorder=3)
         legend_handles = [
             Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=colors[label], markeredgecolor="none", label=f"Actual: {label}")
@@ -438,7 +458,10 @@ def plot_probability_by_run():
         for row in run_df.itertuples(index=False):
             label_ax.hlines(label_y[row.label], row.segment_start_TR, row.segment_end_TR_exclusive, color=colors[row.label], linewidth=7)
         label_ax.set_yticks([0, 1], labels=["Responsive", "Non-responsive"])
-        label_ax.set(ylim=(-0.5, 1.5), xlabel="Time (TR)", ylabel="Actual")
+        label_ax.set(ylim=(-0.5, 1.5), ylabel="Actual")
+        press_rate_ax.plot(time_TRs, press_rate_hz, color="#238b45", linewidth=1.2)
+        press_rate_ax.set(xlabel="Time (TR)", ylabel="Press rate (Hz)")
+        press_rate_ax.grid(axis="y", alpha=0.2)
         top_position = probability_ax.get_position()
         colorbar_ax = fig.add_axes([top_position.x0 - 0.075, top_position.y0, 0.015, top_position.height])
         colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=Normalize(0, 1), cmap=color_map), cax=colorbar_ax)
@@ -738,7 +761,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
+    main()
     # summarize_leave_one_out()
     # visualize_leave_one_out("loro")
     # summarize_buffer_exclusion()
