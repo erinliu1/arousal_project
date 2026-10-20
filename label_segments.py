@@ -2,6 +2,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import json
 
 RAW_DATA = Path("raw_data")
@@ -276,6 +277,131 @@ def plot_segment_counts_by_participant():
     plt.tight_layout()
     plt.savefig(SAVE_PATH / "segment_counts_by_participant.png", dpi=300)
     plt.close()
+
+def plot_segment_counts_by_participant_and_run():
+    responsive = pd.read_csv(SAVE_PATH / "responsive_10TR_segments.csv")
+    non_responsive = pd.read_csv(SAVE_PATH / "non_responsive_10TR_segments.csv")
+    responsive = responsive[~responsive["contains_motion"].astype(str).str.lower().eq("true")]
+    non_responsive = non_responsive[~non_responsive["contains_motion"].astype(str).str.lower().eq("true")]
+
+    responsive_counts = responsive.groupby(["participant", "run"]).size().rename("responsive")
+    non_responsive_counts = non_responsive.groupby(["participant", "run"]).size().rename("non_responsive")
+    counts = (
+        pd.concat([responsive_counts, non_responsive_counts], axis=1)
+        .fillna(0)
+        .astype(int)
+        .reset_index()
+    )
+    counts["_participant_num"] = pd.to_numeric(
+        counts["participant"].astype(str).str.extract(r"(\d+)$")[0],
+        errors="coerce",
+    )
+    counts["_run_num"] = pd.to_numeric(
+        counts["run"].astype(str).str.extract(r"(\d+)$")[0],
+        errors="coerce",
+    )
+    counts = counts.sort_values(["_participant_num", "_run_num"]).reset_index(drop=True)
+
+    participants = counts["participant"].drop_duplicates().tolist()
+    participant_colors = dict(
+        zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants))))
+    )
+    metric_specs = (
+        ("responsive", -0.20, True, "Responsive segments"),
+        ("non_responsive", 0.20, False, "Non-responsive segments"),
+    )
+
+    fig, ax = plt.subplots(figsize=(27, 9))
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color="lightgray", linewidth=1, alpha=0.6)
+    participant_centers = []
+    participant_labels = []
+    x = 0
+
+    for participant_index, (participant, participant_df) in enumerate(
+        counts.groupby("participant", sort=False)
+    ):
+        participant_xs = []
+        color = participant_colors[participant]
+
+        for row_index, (_, row) in enumerate(participant_df.iterrows()):
+            for metric, offset, filled, _ in metric_specs:
+                if row[metric] == 0:
+                    continue
+                ax.scatter(
+                    x + offset,
+                    row[metric],
+                    marker="o",
+                    s=170,
+                    facecolors=color if filled else "none",
+                    edgecolors=color,
+                    alpha=0.85,
+                    linewidths=2,
+                    zorder=3,
+                )
+
+            participant_xs.append(x)
+            if row_index < len(participant_df) - 1:
+                ax.axvline(x + 0.5, color="lightgray", linewidth=2, zorder=0)
+            x += 1
+
+        participant_centers.append(np.mean(participant_xs))
+        participant_number = participant_df["_participant_num"].iloc[0]
+        participant_labels.append(
+            int(participant_number)
+            if pd.notna(participant_number)
+            else participant
+        )
+        if participant_index < len(participants) - 1:
+            ax.axvline(x - 0.5, color="gray", linewidth=3, alpha=0.6, zorder=0)
+
+    ax.set_xticks(participant_centers)
+    ax.set_xticklabels(participant_labels, fontsize=22)
+    ax.tick_params(axis="x", width=2, length=8)
+    ax.tick_params(axis="y", which="both", length=0, labelsize=22)
+    ax.set_xlabel("Participant", fontsize=32, labelpad=15)
+    ax.set_ylabel("Number of motion-free segments", fontsize=30, labelpad=15)
+    ax.set_ylim(bottom=-1)
+    ax.set_title(
+        "Responsive and Non-responsive Segments by Participant and Run",
+        fontsize=34,
+        fontweight="bold",
+    )
+    ax.spines["left"].set_linewidth(2)
+    ax.spines["bottom"].set_linewidth(2)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="0.4" if filled else "none",
+            markeredgecolor="0.4",
+            markeredgewidth=2,
+            markersize=13,
+            label=label,
+        )
+        for _, _, filled, label in metric_specs
+    ]
+    ax.legend(
+        handles=legend_handles,
+        fontsize=18,
+        frameon=True,
+        facecolor="white",
+        edgecolor="0.85",
+        framealpha=1,
+        loc="upper right",
+    )
+
+    fig.tight_layout()
+    output_path = SAVE_PATH / "segment_counts_by_participant_and_run.png"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved segment count visualization to {output_path}")
+    return output_path
 
 if __name__ == "__main__":
     # label_non_responsive_segments()
