@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from framewise_displacement import framewise_displacement, get_motion_TRs
-from all_rois import all_rois
+from all_rois import all_rois, aan_rois, cortical_rois, motor_regions, thalamic_rois
 from roi_processing import filepath_lookup, load_txt_boi, roi_dict_lookup, roi_filepath
 
 """
@@ -127,12 +127,39 @@ def zscore_and_save(participant, run, k=4, nicks_dir=NICKS_DIR, my_dir=RAW_DATA_
             os.makedirs(save_folder, exist_ok=True)
             save_path = os.path.join(save_folder, f'{roi}.npy')
             np.save(save_path, zscored_data)
-    
+
 def save_all(nicks_dir=NICKS_DIR, my_dir=RAW_DATA_DIR, k=4):
     for participant in sorted(os.listdir(nicks_dir)):
         for run in sorted(os.listdir(os.path.join(nicks_dir, participant))):
             zscore_and_save(participant, run, k, nicks_dir, my_dir)
 
-# if __name__ == "__main__":
-#     save_all()
+def save_mean_zbold(participant, run, my_dir=RAW_DATA_DIR):
+    run_dir = os.path.join(my_dir, participant, run)
+    zscored_by_roi = {
+        roi: np.load(os.path.join(run_dir, 'z_scored', f'{roi}.npy'))
+        for roi in all_rois
+    }
+    cortical_nonmotor_rois = [roi for roi in cortical_rois if roi not in motor_regions]
+    roi_groups = {
+        'mean_zBOLD.npy': all_rois,
+        'mean_zAAN.npy': aan_rois,
+        'mean_zThal.npy': thalamic_rois,
+        'mean_zCort.npy': cortical_nonmotor_rois,
+    }
+    for filename, rois in roi_groups.items():
+        mean_zbold = np.mean(np.stack([zscored_by_roi[roi] for roi in rois]), axis=0)
+        np.save(os.path.join(run_dir, filename), mean_zbold)
+
+def save_all_mean_zbold(my_dir=RAW_DATA_DIR):
+    for participant in sorted(os.listdir(my_dir)):
+        participant_dir = os.path.join(my_dir, participant)
+        if not os.path.isdir(participant_dir) or participant.endswith('_b'):
+            continue
+        for run in sorted(os.listdir(participant_dir)):
+            if not os.path.isdir(os.path.join(participant_dir, run)) or not run.startswith('run'):
+                continue
+            save_mean_zbold(participant, run, my_dir)
+
+if __name__ == "__main__":
+    save_all_mean_zbold()
     

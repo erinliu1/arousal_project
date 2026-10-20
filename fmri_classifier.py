@@ -421,6 +421,7 @@ def plot_probability_by_run():
         motion_TRs = np.load(run_dir / "motion_TRs.npy")
         press_times = np.sort(np.load(run_dir / "bps.npy"))
         time_vector = np.load(run_dir / "time_vector.npy")
+        mean_bold = np.load(run_dir / "mean_zBOLD.npy")
         tr_seconds = float(np.median(np.diff(time_vector)))
         window_seconds = 10 * tr_seconds
         half_window = window_seconds / 2
@@ -433,21 +434,25 @@ def plot_probability_by_run():
         press_rate_hz = press_counts / window_seconds
         time_TRs = time_vector / tr_seconds
         midpoint = (run_df["segment_start_TR"] + run_df["segment_end_TR_exclusive"]) / 2
-        fig, (probability_ax, label_ax, press_rate_ax) = plt.subplots(
-            3,
+        fig, (bold_ax, probability_ax, label_ax, press_rate_ax) = plt.subplots(
+            4,
             1,
-            figsize=(12, 6.5),
+            figsize=(12, 8),
             sharex=True,
-            gridspec_kw={"height_ratios": [4, 1, 1.5], "hspace": 0.08},
+            gridspec_kw={"height_ratios": [2, 3, 1, 1.5], "hspace": 0.08},
         )
         fig.subplots_adjust(left=0.14, right=0.98, top=0.84, bottom=0.13)
+        bold_ax.plot(np.arange(len(mean_bold)), mean_bold, color="#756bb1", linewidth=1)
+        bold_ax.axhline(0, color="black", linewidth=0.7, alpha=0.5)
+        bold_ax.set(ylabel="Mean z-scored\nBOLD", title=f"{participant} | {run}")
+        bold_ax.grid(axis="y", alpha=0.2)
         probability_ax.plot(midpoint, run_df["probability_nonresponsive"], color="0.65", linewidth=1)
         probability_ax.scatter(midpoint, run_df["probability_nonresponsive"], c=run_df["label"].map(colors), s=24, edgecolor="white", linewidth=0.35)
         probability_ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
-        probability_ax.set(ylim=(-0.03, 1.03), ylabel="P(non-responsive)", title=f"{participant} | {run}")
+        probability_ax.set(ylim=(-0.03, 1.03), ylabel="P(non-responsive)")
         probability_ax.grid(axis="y", alpha=0.2)
         for motion_TR in motion_TRs:
-            for ax in (probability_ax, label_ax, press_rate_ax):
+            for ax in (bold_ax, probability_ax, label_ax, press_rate_ax):
                 ax.axvline(motion_TR, color="0.35", linestyle=":", linewidth=1, alpha=0.7, zorder=3)
         legend_handles = [
             Line2D([0], [0], marker="o", linestyle="none", markerfacecolor=colors[label], markeredgecolor="none", label=f"Actual: {label}")
