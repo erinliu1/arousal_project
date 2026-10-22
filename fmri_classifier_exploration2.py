@@ -48,15 +48,15 @@ ARGUMENT_SPECS = {
 
     "--rebuild-segment-arrays": {
         "action": "store_true", 
-        "help": "Create any missing segment CSVs, arrays, and diagnostic plots without replacing existing files.",
+        "help": "Create missing segment CSVs, arrays, and diagnostic plots.",
     },
-    "--segment-length": {"type": int, "default": 20, "help": "Consecutive TRs in each segment."},
-    "--segment-stride": {"type": int, "default": 1, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
+    "--segment-length": {"type": int, "default": 10, "help": "Consecutive TRs in each segment."},
+    "--segment-stride": {"type": int, "default": 10, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
 
     "--responsive-window-size": {"type": int, "default": 30, "help": "Responsive sliding-window width in TRs."},
-    "--responsive-window-stride": {"type": int, "default": 1, "help": "TR step between responsive windows."},
+    "--responsive-window-stride": {"type": int, "default": 10, "help": "TR step between responsive windows."},
     "--responsive-min-bp-trs": {"type": int, "default": 8, "help": "Minimum BP-containing TRs per responsive window."},
-    "--responsive-max-bp-gap": {"type": int, "default": 4, "help": "Maximum BP-free gap within a responsive window."},
+    "--responsive-max-bp-gap": {"type": int, "default": 5, "help": "Maximum BP-free gap within a responsive window."},
 
     "--nonresponsive-min-gap": {"type": int, "default": 20, "help": "Minimum BP-free interval duration in TRs."},
 }
@@ -142,7 +142,7 @@ def sort_segments(segments):
     segments["_run_num"] = pd.to_numeric(segments["run"].str.extract(r"(\d+)")[0], errors="coerce")
     return segments.sort_values(["_participant_num", "_run_num", "segment_start_TR"]).drop(columns=["_participant_num", "_run_num"]).reset_index(drop=True)
 
-def save_responsive_windows(window_size=30, stride=1, min_bp_TRs=8, max_gap=4):
+def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5):
     """Classify and save all sliding windows using BP-count and maximum-gap criteria."""
     if min(window_size, stride, min_bp_TRs, max_gap) <= 0:
         raise ValueError("Responsive window criteria must all be positive")
@@ -172,42 +172,54 @@ def save_responsive_windows(window_size=30, stride=1, min_bp_TRs=8, max_gap=4):
     windows.to_csv(output_dir / "responsive_windows.csv", index=False)
     return windows, output_dir
 
-def save_responsive_intervals(windows, output_dir, max_gap=4):
-    """Merge responsive windows, split long BP gaps, trim boundaries, and save intervals."""
-    merged_intervals = []
-    for (participant, run), run_windows in windows[windows["responsive"]].groupby(["participant", "run"]):
-        run_windows = run_windows.sort_values("start_TR").reset_index(drop=True)
-        current_start = int(run_windows.iloc[0]["start_TR"])
-        current_end = int(run_windows.iloc[0]["end_TR"])
-        for _, window in run_windows.iloc[1:].iterrows():
-            if int(window["start_TR"]) <= current_end:
-                current_end = max(current_end, int(window["end_TR"]))
-                continue
-            merged_intervals.append((participant, run, current_start, current_end))
-            current_start, current_end = int(window["start_TR"]), int(window["end_TR"])
-        merged_intervals.append((participant, run, current_start, current_end))
+def save_responsive_intervals(windows, output_dir, max_gap=5):
+    """Merge overlapping or touching responsive windows without splitting or trimming.
 
-    # Split merged intervals into smaller intervals if the BP-free gap exceeds max_gap.
+    G_max is applied to individual windows only, as in analyze_responsiveness.py.
+    """
     interval_rows = []
-    for participant, run, merged_start, merged_end in merged_intervals:
-        bp_TRs = np.unique(np.load(RAW_DATA_DIR / participant / run / "bp_TRs.npy"))
-        bp_TRs = bp_TRs[(bp_TRs >= merged_start) & (bp_TRs < merged_end)]
-        for piece in np.split(bp_TRs, np.flatnonzero(np.diff(bp_TRs) > max_gap) + 1):
-            if not len(piece):
+    for (participant, run), run_windows in windows[windows["responsive"]].groupby(["participant", "run"]):
+        run_windows = run_windows.sort_values("start_TR")
+        current_start = current_end = maximum_gap = None
+        for window in run_windows.itertuples(index=False):
+            start, end = int(window.start_TR), int(window.end_TR)
+            gap = int(window.max_within_window_gap)
+            if current_end is not None and start <= current_end:
+                current_end = max(current_end, end)
+                maximum_gap = max(maximum_gap, gap)
                 continue
-            start, end = int(piece[0]), int(piece[-1]) + 1
-            interval_rows.append({
-                "participant": participant, "run": run, "start_TR": start, "end_TR": end,
-                "duration_TRs": end - start,
-                "max_within_window_gap": int(np.diff(piece).max()) if len(piece) > 1 else 0,
-            })
+            if current_end is not None:
+                interval_rows.append({
+                    "participant": participant, "run": run, "start_TR": current_start,
+                    "end_TR": current_end, "duration_TRs": current_end - current_start,
+                    "max_within_window_gap": maximum_gap,
+                })
+            current_start, current_end, maximum_gap = start, end, gap
+        interval_rows.append({
+            "participant": participant, "run": run, "start_TR": current_start,
+            "end_TR": current_end, "duration_TRs": current_end - current_start,
+            "max_within_window_gap": maximum_gap,
+        })
     columns = ["participant", "run", "start_TR", "end_TR", "duration_TRs", "max_within_window_gap"]
     intervals = pd.DataFrame(interval_rows, columns=columns)
     intervals.to_csv(output_dir / "responsive_intervals.csv", index=False)
     return intervals
 
-def save_responsive_segments(intervals, output_dir, segment_length=20, stride=1):
-    """Extract fixed-length sliding segments from responsive intervals and save them."""
+
+def get_centered_segments(start_TR, end_TR_exclusive, segment_length=10, stride=10, buffer=10):
+    """Buffer both ends and center the segment grid, matching label_segments.py."""
+    usable_start = int(start_TR) + buffer
+    usable_length = int(end_TR_exclusive) - buffer - usable_start
+    if usable_length < segment_length:
+        return []
+    n_segments = 1 + (usable_length - segment_length) // stride
+    used_length = segment_length + (n_segments - 1) * stride
+    first_start = usable_start + (usable_length - used_length) // 2
+    return [(first_start + i * stride, first_start + i * stride + segment_length)
+            for i in range(n_segments)]
+
+def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10):
+    """Buffer responsive intervals by 10 TRs at each end and center the segments."""
     if segment_length <= 0 or stride <= 0:
         raise ValueError("Segment length and stride must be positive")
     segment_dir = output_dir / f"TR={segment_length},SW={stride}"
@@ -216,8 +228,7 @@ def save_responsive_segments(intervals, output_dir, segment_length=20, stride=1)
     for interval in intervals.itertuples(index=False):
         participant, run = str(interval.participant), str(interval.run)
         motion_TRs = load_motion_TRs(participant, run)
-        for start in range(int(interval.start_TR), int(interval.end_TR) - segment_length + 1, stride):
-            end = start + segment_length
+        for start, end in get_centered_segments(interval.start_TR, interval.end_TR, segment_length, stride):
             rows.append({
                 "participant": participant, "run": run, "label": "responsive",
                 "segment_start_TR": start, "segment_end_TR_exclusive": end,
@@ -266,8 +277,8 @@ def save_nonresponsive_intervals(threshold=20):
             intervals.to_csv(path, index=False)
     return bounded, end_intervals, whole_runs, output_dir
 
-def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, segment_length=20, stride=1):
-    """Extract and save sliding segments from each non-responsive interval category."""
+def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, segment_length=10, stride=10):
+    """Buffer each non-responsive interval by 10 TRs per end and center segments."""
     if segment_length <= 0 or stride <= 0:
         raise ValueError("Segment length and stride must be positive")
     segment_dir = output_dir / f"TR={segment_length},SW={stride}"
@@ -282,8 +293,7 @@ def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, 
         for interval in intervals.itertuples(index=False):
             participant, run = str(interval.participant), str(interval.run)
             motion_TRs = load_motion_TRs(participant, run)
-            for start in range(int(interval.start_TR), int(interval.end_TR) - segment_length + 1, stride):
-                end = start + segment_length
+            for start, end in get_centered_segments(interval.start_TR, interval.end_TR, segment_length, stride):
                 rows.append({
                     "participant": participant, "run": run, "label": "non-responsive",
                     "segment_start_TR": start, "segment_end_TR_exclusive": end,
@@ -309,22 +319,15 @@ def get_nonresponsive_segments_path(args):
 def get_responsive_segments(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     responsive_dir = CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}"
-    windows_path, intervals_path = responsive_dir / "responsive_windows.csv", responsive_dir / "responsive_intervals.csv"
+    windows_path = responsive_dir / "responsive_windows.csv"
     if windows_path.exists():
         responsive_windows = pd.read_csv(windows_path)
     else:
         responsive_windows, responsive_dir = save_responsive_windows(
             W, S, N_min, G_max,
         )
-    if intervals_path.exists():
-        responsive_intervals = pd.read_csv(intervals_path)
-    else:
-        responsive_intervals = save_responsive_intervals(
-            responsive_windows, responsive_dir, args.responsive_max_bp_gap
-        )
-    segments_path = get_responsive_segments_path(args)
-    if segments_path.exists():
-        return pd.read_csv(segments_path)
+    # Recompute downstream tables so pre-port split/trim and unbuffered caches cannot be reused.
+    responsive_intervals = save_responsive_intervals(responsive_windows, responsive_dir, G_max)
     return save_responsive_segments(responsive_intervals, responsive_dir, args.segment_length, args.segment_stride)
 
 def get_nonresponsive_segments(args):
@@ -337,9 +340,6 @@ def get_nonresponsive_segments(args):
         bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(
             args.nonresponsive_min_gap
         )
-    segments_path = get_nonresponsive_segments_path(args)
-    if segments_path.exists():
-        return pd.read_csv(segments_path)
     return save_nonresponsive_segments(
         bounded, end_intervals, whole_runs, nonresponsive_dir, args.segment_length, args.segment_stride
     )
@@ -373,13 +373,14 @@ def save_segment_metadata(args):
 
 def load_segment_metadata(args):
     """Return all motion-free segments from both behavioral classes."""
-    try:
-        return pd.read_csv(get_segment_dir(args) / "all_segment_metadata.csv")
-    except FileNotFoundError:
-        return save_segment_metadata(args)
+    segment_dir = get_segment_dir(args)
+    metadata_path = segment_dir / "all_segment_metadata.csv"
+    if metadata_path.exists():
+        return pd.read_csv(metadata_path)
+    return save_segment_metadata(args)
 
 def save_segment_arrays(args):
-    """Create missing all-ROI inputs or labels without replacing cached arrays."""
+    """Create missing all-ROI inputs and labels using the cached metadata."""
     metadata = load_segment_metadata(args)
     segment_dir = get_segment_dir(args)
     lengths = metadata["segment_end_TR_exclusive"] - metadata["segment_start_TR"]
