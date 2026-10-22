@@ -69,8 +69,6 @@ def parse_args():
     args = parser.parse_args()
     try:
         args.rois, args.roi_label = resolve_rois(args.rois)
-        print(f"Selected ({len(args.rois)}) ROIs: {args.rois}")
-        print(f"ROI label: {args.roi_label}")
     except ValueError as error:
         parser.error(str(error))
     return args
@@ -79,7 +77,7 @@ def resolve_rois(values):
     """
     From argument parser, takes in a list of strings, which could be ROI groups, i.e. "all_rois", "aan_rois", "thalamic_rois", or "cortical_rois", and/or individual ROI names.
 
-    Expand ROI groups into individual ROI names, remove duplicates, and return a folder label for the selected ROIs. Raise ValueError if any unknown ROI names are provided.
+    Expand ROI groups into individual ROI names, remove duplicates, and returns list of selected individual ROI names (in canonical order) and a folder label for the selected ROIs. Raise ValueError if any unknown ROI names are provided.
     """ 
     invalid = [value for value in values if value not in ROI_GROUPS and value not in all_rois]
     if invalid:
@@ -326,12 +324,15 @@ def get_nonresponsive_segments(args):
         return save_nonresponsive_segments(
             bounded, end_intervals, whole_runs, nonresponsive_dir, args.segment_length, args.segment_stride
         )
-    
-def get_segment_dir(args):
+
+def get_segment_dir_name(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     T_min = args.nonresponsive_min_gap
     TR, SW = args.segment_length, args.segment_stride
-    segment_dir = CLASSIFIER_DIR / "segments" /f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW}):ROIs={args.roi_label}"
+    return f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW})"
+
+def get_segment_dir(args):
+    segment_dir = CLASSIFIER_DIR / "segments" / get_segment_dir_name(args)
     segment_dir.mkdir(parents=True, exist_ok=True)
     return segment_dir
 
@@ -359,36 +360,40 @@ def load_segment_metadata(args):
         return save_segment_metadata(args)
 
 def save_segment_arrays(args):
-    """Build and store model inputs, labels, and their segment metadata."""
+    """Build and store model inputs for every ROI, labels, and segment metadata."""
     metadata = load_segment_metadata(args)
     segment_dir = get_segment_dir(args)
     lengths = metadata["segment_end_TR_exclusive"] - metadata["segment_start_TR"]
     if not (lengths == lengths.iloc[0]).all():
         raise ValueError("All segments must have the same length")
-    X = np.empty((len(metadata), int(lengths.iloc[0]), len(args.rois)), dtype=np.float32)
+    X = np.empty((len(metadata), int(lengths.iloc[0]), len(all_rois)), dtype=np.float32)
     y = metadata["label"].map({"responsive": 0.0, "non-responsive": 1.0})
     y = y.to_numpy(dtype=np.float32)
     for (participant, run), run_metadata in metadata.groupby(["participant", "run"], sort=False):
         run_data = np.column_stack([
-            np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in args.rois
+            np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in all_rois
         ]).astype(np.float32, copy=False)
         for segment_index, segment in run_metadata.iterrows():
             start, end = int(segment["segment_start_TR"]), int(segment["segment_end_TR_exclusive"])
             X[segment_index] = run_data[start:end]
     np.save(segment_dir / "X.npy", X)
     np.save(segment_dir / "y.npy", y)
-    pd.DataFrame({"roi": args.rois}).to_csv(segment_dir / "rois.csv", index=False)
     return X, y, metadata
 
 def load_segments(args):
-    """Load cached segment data, rebuilding it when requested or missing."""
+    """Load the all-ROI cache and select the requested ROI columns."""
     segment_dir = get_segment_dir(args)
     array_paths = [segment_dir / name for name in ("X.npy", "y.npy")]
     metadata_path = segment_dir / "all_segment_metadata.csv"
-    if args.rebuild_segment_arrays or not all(path.exists() for path in array_paths) or not metadata_path.exists():
-        print("Building segment arrays in ", segment_dir)
-        return save_segment_arrays(args)
-    return np.load(array_paths[0]), np.load(array_paths[1]), pd.read_csv(metadata_path).reset_index(drop=True)
+    cache_paths = [*array_paths, metadata_path]
+    if args.rebuild_segment_arrays or not all(path.exists() for path in cache_paths):
+        print("Building segment arrays in ", get_segment_dir_name(args))
+        X, y, metadata = save_segment_arrays(args)
+    else:
+        X, y = np.load(array_paths[0]), np.load(array_paths[1])
+        metadata = pd.read_csv(metadata_path).reset_index(drop=True)
+    roi_indices = [all_rois.index(roi) for roi in args.rois]
+    return X[:, :, roi_indices], y, metadata
 
 class ArousalDataset(Dataset):
     """Store segment arrays and binary labels as PyTorch tensors."""
@@ -566,14 +571,16 @@ def run_analysis(args):
 
 
 def main():
-    """Parse settings and optionally launch classifier training."""
     args = parse_args()
     if args.run_training:
         print(f"Using device: {DEVICE}")
         print(f"Analysis: {args.analysis}")
-        print(f"Selected ROIs: {args.rois}")
+        print(f"Selected ({len(args.rois)}) ROIs: {args.roi_label}")
         print(f"Running training with settings: {args}")
         run_analysis(args)
+    elif args.rebuild_segment_arrays:
+        print(f"Rebuilding segment arrays with settings: {get_segment_dir_name(args)}")
+        save_segment_arrays(args)
 
 
 if __name__ == "__main__":
