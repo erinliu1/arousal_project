@@ -1,1 +1,0 @@
-removed the precentral and postcentral cortical roi's because those are motion-sensitive
