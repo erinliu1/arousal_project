@@ -4,6 +4,7 @@ import random
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import balanced_accuracy_score
 from sklearn.model_selection import LeaveOneGroupOut
 import torch
 import torch.nn as nn
@@ -11,6 +12,8 @@ from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from tqdm import tqdm
 
 from all_rois import aan_rois, cortical_rois, thalamic_rois, all_rois
+from scatterplots import (scatter_non_responsive_intervals, scatter_responsive_intervals,
+                          scatter_segement_counts, visualize_leave_one_out, plot_training_history)
 
 
 RAW_DATA_DIR = Path("raw_data")
@@ -45,7 +48,7 @@ ARGUMENT_SPECS = {
 
     "--rebuild-segment-arrays": {
         "action": "store_true", 
-        "help": "Recreate cached segment arrays from ROI files before training.",
+        "help": "Create any missing segment CSVs, arrays, and diagnostic plots without replacing existing files.",
     },
     "--segment-length": {"type": int, "default": 20, "help": "Consecutive TRs in each segment."},
     "--segment-stride": {"type": int, "default": 1, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
@@ -254,9 +257,13 @@ def save_nonresponsive_intervals(threshold=20):
     bounded = pd.DataFrame(bounded, columns=columns)
     end_intervals = pd.DataFrame(end_intervals, columns=columns)
     whole_runs = pd.DataFrame(whole_runs, columns=columns)
-    bounded.to_csv(output_dir / "non_responsive_intervals.csv", index=False)
-    end_intervals.to_csv(output_dir / "non_responsive_end_intervals.csv", index=False)
-    whole_runs.to_csv(output_dir / "non_responsive_whole_runs.csv", index=False)
+    outputs = ((bounded, "non_responsive_intervals.csv"),
+               (end_intervals, "non_responsive_end_intervals.csv"),
+               (whole_runs, "non_responsive_whole_runs.csv"))
+    for intervals, filename in outputs:
+        path = output_dir / filename
+        if not path.exists():
+            intervals.to_csv(path, index=False)
     return bounded, end_intervals, whole_runs, output_dir
 
 def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, segment_length=20, stride=1):
@@ -300,30 +307,42 @@ def get_nonresponsive_segments_path(args):
     return CLASSIFIER_DIR / "non_responsiveness" / f"T_min={T_min}" / f"TR={TR},SW={SW}" / "nonresponsive_segments.csv"
 
 def get_responsive_segments(args):
-    try:
-        return pd.read_csv(get_responsive_segments_path(args))
-    except FileNotFoundError:
+    W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
+    responsive_dir = CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}"
+    windows_path, intervals_path = responsive_dir / "responsive_windows.csv", responsive_dir / "responsive_intervals.csv"
+    if windows_path.exists():
+        responsive_windows = pd.read_csv(windows_path)
+    else:
         responsive_windows, responsive_dir = save_responsive_windows(
-            args.responsive_window_size, args.responsive_window_stride,
-            args.responsive_min_bp_trs, args.responsive_max_bp_gap,
+            W, S, N_min, G_max,
         )
+    if intervals_path.exists():
+        responsive_intervals = pd.read_csv(intervals_path)
+    else:
         responsive_intervals = save_responsive_intervals(
             responsive_windows, responsive_dir, args.responsive_max_bp_gap
         )
-        return save_responsive_segments(
-            responsive_intervals, responsive_dir, args.segment_length, args.segment_stride
-        )
+    segments_path = get_responsive_segments_path(args)
+    if segments_path.exists():
+        return pd.read_csv(segments_path)
+    return save_responsive_segments(responsive_intervals, responsive_dir, args.segment_length, args.segment_stride)
 
 def get_nonresponsive_segments(args):
-    try:
-        return pd.read_csv(get_nonresponsive_segments_path(args))
-    except FileNotFoundError:
+    nonresponsive_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={args.nonresponsive_min_gap}"
+    interval_paths = [nonresponsive_dir / name for name in
+                      ("non_responsive_intervals.csv", "non_responsive_end_intervals.csv", "non_responsive_whole_runs.csv")]
+    if all(path.exists() for path in interval_paths):
+        bounded, end_intervals, whole_runs = [pd.read_csv(path) for path in interval_paths]
+    else:
         bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(
             args.nonresponsive_min_gap
         )
-        return save_nonresponsive_segments(
-            bounded, end_intervals, whole_runs, nonresponsive_dir, args.segment_length, args.segment_stride
-        )
+    segments_path = get_nonresponsive_segments_path(args)
+    if segments_path.exists():
+        return pd.read_csv(segments_path)
+    return save_nonresponsive_segments(
+        bounded, end_intervals, whole_runs, nonresponsive_dir, args.segment_length, args.segment_stride
+    )
 
 def get_segment_dir_name(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
@@ -360,25 +379,52 @@ def load_segment_metadata(args):
         return save_segment_metadata(args)
 
 def save_segment_arrays(args):
-    """Build and store model inputs for every ROI, labels, and segment metadata."""
+    """Create missing all-ROI inputs or labels without replacing cached arrays."""
     metadata = load_segment_metadata(args)
     segment_dir = get_segment_dir(args)
     lengths = metadata["segment_end_TR_exclusive"] - metadata["segment_start_TR"]
     if not (lengths == lengths.iloc[0]).all():
         raise ValueError("All segments must have the same length")
-    X = np.empty((len(metadata), int(lengths.iloc[0]), len(all_rois)), dtype=np.float32)
-    y = metadata["label"].map({"responsive": 0.0, "non-responsive": 1.0})
-    y = y.to_numpy(dtype=np.float32)
-    for (participant, run), run_metadata in metadata.groupby(["participant", "run"], sort=False):
-        run_data = np.column_stack([
-            np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in all_rois
-        ]).astype(np.float32, copy=False)
-        for segment_index, segment in run_metadata.iterrows():
-            start, end = int(segment["segment_start_TR"]), int(segment["segment_end_TR_exclusive"])
-            X[segment_index] = run_data[start:end]
-    np.save(segment_dir / "X.npy", X)
-    np.save(segment_dir / "y.npy", y)
+    X_path, y_path = segment_dir / "X.npy", segment_dir / "y.npy"
+    if X_path.exists():
+        X = np.load(X_path)
+    else:
+        X = np.empty((len(metadata), int(lengths.iloc[0]), len(all_rois)), dtype=np.float32)
+        for (participant, run), run_metadata in metadata.groupby(["participant", "run"], sort=False):
+            run_data = np.column_stack([
+                np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in all_rois
+            ]).astype(np.float32, copy=False)
+            for segment_index, segment in run_metadata.iterrows():
+                start, end = int(segment["segment_start_TR"]), int(segment["segment_end_TR_exclusive"])
+                X[segment_index] = run_data[start:end]
+        np.save(X_path, X)
+    if y_path.exists():
+        y = np.load(y_path)
+    else:
+        y = metadata["label"].map({"responsive": 0.0, "non-responsive": 1.0}).to_numpy(dtype=np.float32)
+        np.save(y_path, y)
     return X, y, metadata
+
+def save_missing_scatterplots(args, metadata):
+    """Create only missing interval and segment-count plots and their source CSVs."""
+    get_responsive_segments(args)
+    get_nonresponsive_segments(args)
+    W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
+    responsive_dir = CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}"
+    nonresponsive_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={args.nonresponsive_min_gap}"
+    segment_dir = get_segment_dir(args)
+    responsive_plot = responsive_dir / "responsive_intervals.png"
+    nonresponsive_plot = nonresponsive_dir / "nonresponsive_intervals.png"
+    segment_plot = segment_dir / "segment_counts.png"
+    if not responsive_plot.exists():
+        scatter_responsive_intervals(pd.read_csv(responsive_dir / "responsive_intervals.csv"), RAW_DATA_DIR, responsive_dir)
+    if not nonresponsive_plot.exists():
+        bounded = pd.read_csv(nonresponsive_dir / "non_responsive_intervals.csv")
+        end_intervals = pd.read_csv(nonresponsive_dir / "non_responsive_end_intervals.csv")
+        whole_runs = pd.read_csv(nonresponsive_dir / "non_responsive_whole_runs.csv")
+        scatter_non_responsive_intervals(bounded, whole_runs, end_intervals, RAW_DATA_DIR, nonresponsive_dir)
+    if not segment_plot.exists():
+        scatter_segement_counts(metadata, RAW_DATA_DIR, segment_dir)
 
 def load_segments(args):
     """Load the all-ROI cache and select the requested ROI columns."""
@@ -386,12 +432,14 @@ def load_segments(args):
     array_paths = [segment_dir / name for name in ("X.npy", "y.npy")]
     metadata_path = segment_dir / "all_segment_metadata.csv"
     cache_paths = [*array_paths, metadata_path]
-    if args.rebuild_segment_arrays or not all(path.exists() for path in cache_paths):
-        print("Building segment arrays in ", get_segment_dir_name(args))
+    if not all(path.exists() for path in cache_paths):
+        print("Building segment arrays:")
         X, y, metadata = save_segment_arrays(args)
     else:
         X, y = np.load(array_paths[0]), np.load(array_paths[1])
         metadata = pd.read_csv(metadata_path).reset_index(drop=True)
+    if args.rebuild_segment_arrays:
+        save_missing_scatterplots(args, metadata)
     roi_indices = [all_rois.index(roi) for roi in args.rois]
     return X[:, :, roi_indices], y, metadata
 
@@ -470,6 +518,24 @@ def evaluate_model(model, loader):
     return {"accuracy": np.mean(predictions == labels), "labels": labels,
             "predictions": predictions, "probabilities": probabilities}
 
+def epoch_class_metrics(model, loader):
+    """Return class-specific BCE loss and recall for one epoch."""
+    model.eval()
+    labels, predictions, losses = [], [], []
+    with torch.no_grad():
+        for X_batch, y_batch in loader:
+            logits = model(X_batch.to(DEVICE))
+            labels.append(y_batch.numpy())
+            predictions.append((logits >= 0).cpu().numpy())
+            losses.append(nn.functional.binary_cross_entropy_with_logits(
+                logits, y_batch.to(DEVICE), reduction="none").cpu().numpy())
+    labels, predictions, losses = map(np.concatenate, (labels, predictions, losses))
+    responsive, nonresponsive = labels == 0, labels == 1
+    return {"r_loss": losses[responsive].mean() if responsive.any() else np.nan,
+            "nr_loss": losses[nonresponsive].mean() if nonresponsive.any() else np.nan,
+            "r_recall": (predictions[responsive] == 0).mean() if responsive.any() else np.nan,
+            "nr_recall": (predictions[nonresponsive] == 1).mean() if nonresponsive.any() else np.nan}
+
 def run_fold(dataset, train_indices, test_indices, participants, args):
     """Train and evaluate one cross-validation fold."""
     set_seed(args.seed)
@@ -482,8 +548,9 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
 
-    progress = tqdm(range(args.epochs), desc="Training")
-    for _ in progress:
+    history = []
+    progress = tqdm(range(1, args.epochs + 1), desc="Training")
+    for epoch in progress:
         model.train()
         total_loss = 0.0
         for X_batch, y_batch in train_loader:
@@ -494,11 +561,13 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
         progress.set_postfix(train_loss=f"{total_loss / len(train_dataset):.4f}")
+        for split, loader in (("train", train_evaluation_loader), ("validation", test_loader)):
+            history.append({"epoch": epoch, "split": split, **epoch_class_metrics(model, loader)})
 
     train_results = evaluate_model(model, train_evaluation_loader)
     test_results = evaluate_model(model, test_loader)
     test_results["train_accuracy"] = train_results["accuracy"]
-    return test_results
+    return test_results, pd.DataFrame(history)
 
 
 def get_folds(X, y, participants, metadata, analysis):
@@ -514,9 +583,9 @@ def format_learning_rate(learning_rate):
     return f"{learning_rate:.0e}".replace("e-0", "e-").replace("e+0", "e+")
 
 def output_settings(args):
-    """Return the hierarchical model-results directory and filename prefix."""
+    """Return the config/ROI/model/analysis results directory and filename prefix."""
     model_dir = f"model=GRU,epochs={args.epochs},batch={args.batch_size},LR={format_learning_rate(args.learning_rate)}"
-    save_dir = CLASSIFIER_DIR / "model_results" / args.roi_label / model_dir / args.analysis.upper()
+    save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper()
     return save_dir, args.analysis
 
 
@@ -530,11 +599,15 @@ def run_analysis(args):
     save_dir, prefix = output_settings(args)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    fold_rows, prediction_rows = [], []
+    fold_rows, prediction_rows, train_sizes = [], [], []
     for fold, (train_indices, test_indices) in enumerate(folds, start=1):
         print(f"\n{'=' * 50}\nFold {fold}/{len(folds)}\n{'=' * 50}")
         held_out = metadata.iloc[test_indices[0]]
-        results = run_fold(dataset, train_indices, test_indices, participants, args)
+        results, fold_history = run_fold(dataset, train_indices, test_indices, participants, args)
+        fold_history.insert(0, "fold", fold)
+        history_path = save_dir / f"{prefix}_training_history.csv"
+        fold_history.to_csv(history_path, mode="w" if fold == 1 else "a", header=fold == 1, index=False)
+        train_sizes.append(len(train_indices))
         print(f"Train accuracy: {results['train_accuracy']:.4f}")
         print(f"Test accuracy: {results['accuracy']:.4f}")
 
@@ -565,9 +638,25 @@ def run_analysis(args):
                 row["participant_seen"] = int(participants[segment_index] in train_participants)
             prediction_rows.append(row)
 
-    pd.DataFrame(fold_rows).to_csv(save_dir / f"{prefix}_fold_results.csv", index=False)
-    pd.DataFrame(prediction_rows).to_csv(save_dir / f"{prefix}_predictions.csv", index=False)
-    print(f"Saved fold results and predictions to {save_dir}")
+    results_df = pd.DataFrame(fold_rows)
+    predictions_df = pd.DataFrame(prediction_rows)
+    results_df.to_csv(save_dir / f"{prefix}_fold_results.csv", index=False)
+    predictions_df.to_csv(save_dir / f"{prefix}_predictions.csv", index=False)
+
+    responsive = predictions_df["label_binary"] == 0
+    nonresponsive = predictions_df["label_binary"] == 1
+    labels, predictions = predictions_df["label_binary"], predictions_df["prediction"]
+    summary = pd.DataFrame([{
+        "pooled_train_accuracy": np.average(results_df["train_accuracy"], weights=train_sizes),
+        "pooled_test_accuracy": (predictions == labels).mean(),
+        "responsive_recall": (predictions_df.loc[responsive, "prediction"] == 0).mean(),
+        "nonresponsive_recall": (predictions_df.loc[nonresponsive, "prediction"] == 1).mean(),
+        "balanced_test_accuracy": balanced_accuracy_score(labels, predictions),
+    }])
+    summary.to_csv(save_dir / f"{prefix}_summary.csv", index=False)
+    print(summary.to_string(index=False))
+    visualize_leave_one_out(args.analysis, save_dir)
+    plot_training_history(args.analysis, save_dir)
 
 
 def main():
@@ -576,11 +665,12 @@ def main():
         print(f"Using device: {DEVICE}")
         print(f"Analysis: {args.analysis}")
         print(f"Selected ({len(args.rois)}) ROIs: {args.roi_label}")
-        print(f"Running training with settings: {args}")
+        print(f"Running training for: {get_segment_dir_name(args)}")
         run_analysis(args)
     elif args.rebuild_segment_arrays:
-        print(f"Rebuilding segment arrays with settings: {get_segment_dir_name(args)}")
-        save_segment_arrays(args)
+        print(f"Ensuring segment artifacts exist for: {get_segment_dir_name(args)}")
+        _, _, metadata = load_segments(args)
+        print(metadata.groupby("label").size().rename("segment_count"))
 
 
 if __name__ == "__main__":
