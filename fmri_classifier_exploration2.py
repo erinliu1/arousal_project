@@ -520,7 +520,7 @@ def evaluate_model(model, loader):
             "predictions": predictions, "probabilities": probabilities}
 
 def epoch_class_metrics(model, loader):
-    """Return class-specific BCE loss and recall for one epoch."""
+    """Return segment-level sufficient statistics for class-specific loss and recall."""
     model.eval()
     labels, predictions, losses = [], [], []
     with torch.no_grad():
@@ -531,11 +531,21 @@ def epoch_class_metrics(model, loader):
             losses.append(nn.functional.binary_cross_entropy_with_logits(
                 logits, y_batch.to(DEVICE), reduction="none").cpu().numpy())
     labels, predictions, losses = map(np.concatenate, (labels, predictions, losses))
-    responsive, nonresponsive = labels == 0, labels == 1
-    return {"r_loss": losses[responsive].mean() if responsive.any() else np.nan,
-            "nr_loss": losses[nonresponsive].mean() if nonresponsive.any() else np.nan,
-            "r_recall": (predictions[responsive] == 0).mean() if responsive.any() else np.nan,
-            "nr_recall": (predictions[nonresponsive] == 1).mean() if nonresponsive.any() else np.nan}
+    metrics = {}
+    for prefix, label in (("r", 0), ("nr", 1)):
+        mask = labels == label
+        values_by_metric = {
+            "loss": losses[mask].astype(np.float64),
+            "recall": (predictions[mask] == label).astype(np.float64),
+        }
+        for name, values in values_by_metric.items():
+            metric = f"{prefix}_{name}"
+            # Sufficient statistics pool segment observations without saving every prediction.
+            metrics[metric] = values.mean() if len(values) else np.nan
+            metrics[f"{metric}_count"] = len(values)
+            metrics[f"{metric}_sum"] = values.sum()
+            metrics[f"{metric}_sum_sq"] = np.square(values).sum()
+    return metrics
 
 def run_fold(dataset, train_indices, test_indices, participants, args):
     """Train and evaluate one cross-validation fold."""

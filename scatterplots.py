@@ -187,23 +187,49 @@ def visualize_leave_one_out(analysis, result_dir):
     return output_path
 
 
+def pool_segment_history(history, metric):
+    """Pool segment counts and moments across folds for each epoch and split."""
+    columns = [f"{metric}_count", f"{metric}_sum", f"{metric}_sum_sq"]
+    if not set(columns).issubset(history.columns):
+        raise ValueError(
+            "Training history lacks segment-level statistics. "
+            "Rerun training to generate counts, sums, and squared sums; "
+            "segment-level loss variance cannot be recovered from fold averages."
+        )
+    pooled = history.groupby(["split", "epoch"])[columns].sum()
+    count, total, total_sq = (pooled[column] for column in columns)
+    mean = total / count.replace(0, np.nan)
+    variance = ((total_sq - total.pow(2) / count.replace(0, np.nan))
+                / (count - 1).where(count > 1)).clip(lower=0)
+    return pd.DataFrame({"mean": mean, "std": np.sqrt(variance), "count": count,
+                         "ci95": 1.96 * np.sqrt(variance / count.replace(0, np.nan))})
+
+
 def plot_training_history(analysis, result_dir):
-    """Plot mean class-specific loss and recall with 95% CIs across folds."""
+    """Plot pooled segment means and 95% confidence intervals for loss and recall.
+
+    Training pools repeated segment evaluations across folds. Confidence bands
+    describe segment observations, without adjusting for dependence across folds.
+    """
     analysis, result_dir = analysis.lower(), Path(result_dir)
     history = pd.read_csv(result_dir / f"{analysis}_training_history.csv")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
     panels = (("r_loss", "Responsive loss"), ("nr_loss", "Non-responsive loss"),
               ("r_recall", "Responsive recall"), ("nr_recall", "Non-responsive recall"))
+    summaries = {metric: pool_segment_history(history, metric) for metric, _ in panels}
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
     colors = {"train": "tab:blue", "validation": "tab:orange"}
     for ax, (metric, title) in zip(axes.flat, panels):
         for split, color in colors.items():
-            values = history[history["split"] == split].groupby("epoch")[metric]
-            mean, sem = values.mean(), values.std() / np.sqrt(values.count())
-            epochs, average, ci = mean.index.to_numpy(), mean.to_numpy(), (1.96 * sem).fillna(0).to_numpy()
+            if split not in summaries[metric].index.get_level_values("split"):
+                continue
+            summary = summaries[metric].xs(split, level="split")
+            epochs = summary.index.to_numpy()
+            average, ci = summary["mean"].to_numpy(), summary["ci95"].to_numpy()
             ax.plot(epochs, average, color=color, linewidth=2, label=split.title())
             ax.fill_between(epochs, average - ci, average + ci, color=color, alpha=0.2)
         ax.set_title(title)
         ax.grid(alpha=0.2)
+    fig.suptitle("Segment-weighted means and 95% confidence intervals")
     axes[0, 0].legend(loc="upper right")
     axes[0, 0].set_ylabel("Binary cross-entropy loss")
     axes[1, 0].set_ylabel("Recall")
