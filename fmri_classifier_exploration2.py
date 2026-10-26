@@ -653,6 +653,7 @@ def run_analysis(args):
     summary = pd.DataFrame([{
         "pooled_train_accuracy": np.average(results_df["train_accuracy"], weights=train_sizes),
         "pooled_test_accuracy": (predictions == labels).mean(),
+        "fold_averaged_accuracy": results_df["test_accuracy"].mean(),
         "responsive_recall": (predictions_df.loc[responsive, "prediction"] == 0).mean(),
         "nonresponsive_recall": (predictions_df.loc[nonresponsive, "prediction"] == 1).mean(),
         "balanced_test_accuracy": balanced_accuracy_score(labels, predictions),
@@ -729,8 +730,9 @@ def summarize():
             relative_dir = result_dir.relative_to(segment_dir)
             table = tables.setdefault(relative_dir, {"summaries": [], "folds": []})
             summary_row = pd.read_csv(summary_file).iloc[0].to_dict()
-            table["summaries"].append({**settings, **counts, **summary_row})
             folds = pd.read_csv(folds_file)
+            summary_row["fold_averaged_accuracy"] = folds["test_accuracy"].mean()
+            table["summaries"].append({**settings, **counts, **summary_row})
             table["folds"].append(folds.assign(**settings))
 
     written_dirs = []
