@@ -50,6 +50,7 @@ ARGUMENT_SPECS = {
     "--epochs": {"type": int, "default": 30, "help": "Training passes through each fold."},
     "--batch-size": {"type": int, "default": 32, "help": "Segments per training batch."},
     "--learning-rate": {"type": float, "default": 1e-3, "help": "Adam optimizer learning rate."},
+    "--weight-decay": {"type": float, "default": 1e-4, "help": "Adam optimizer L2 regularization."},
 
     "--rebuild-segment-arrays": {
         "action": "store_true", 
@@ -584,7 +585,7 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
     test_loader = DataLoader(Subset(dataset, test_indices), batch_size=args.batch_size, shuffle=False)
     model = ArousalGRU(dataset.X.shape[-1]).to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     history = []
     progress = tqdm(range(1, args.epochs + 1), desc="Training")
@@ -622,7 +623,8 @@ def format_learning_rate(learning_rate):
 
 def output_settings(args):
     """Return the config/ROI/model/analysis results directory and filename prefix."""
-    model_dir = f"model=GRU,epochs={args.epochs},batch={args.batch_size},LR={format_learning_rate(args.learning_rate)}"
+    model_dir = (f"model=GRU,epochs={args.epochs},batch={args.batch_size},"
+                 f"LR={format_learning_rate(args.learning_rate)},WD={format_learning_rate(args.weight_decay)}")
     save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper()
     return save_dir, args.analysis
 

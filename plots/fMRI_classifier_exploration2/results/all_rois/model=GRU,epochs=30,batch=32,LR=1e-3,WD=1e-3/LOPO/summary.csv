@@ -1,0 +1,2 @@
+responsive_window_size,responsive_window_stride,responsive_min_bp_trs,responsive_max_bp_gap,nonresponsive_min_gap,segment_length,segment_stride,trim,n_segments,n_responsive,n_nonresponsive,missing_participants,pooled_train_accuracy,pooled_test_accuracy,fold_averaged_accuracy,responsive_recall,nonresponsive_recall,balanced_test_accuracy
+30,1,8,4,20,40,40,True,2391,990,1401,,0.982632239318497,0.7636971978251778,0.7931593992855294,0.7313131313131314,0.7865810135617416,0.7589470724374365
