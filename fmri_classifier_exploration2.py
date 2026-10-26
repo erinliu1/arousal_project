@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import random
+import re
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,10 @@ ARGUMENT_SPECS = {
         "action": "store_true", 
         "help": "Train and save predictions; otherwise only show the settings.",
     },
+    "--summarize": {
+        "action": "store_true",
+        "help": "Collect all completed classifier runs into CSV files under the results folder.",
+    },
 
     "--rois": {"type": str, "nargs": "+", "default": ["all_rois"],
                "help": "list ROI groups i.e. all_rois, aan_rois, thalamic_rois, or cortical_rois, and/or individual ROI names in quotes separated by spaces"},
@@ -48,7 +53,7 @@ ARGUMENT_SPECS = {
 
     "--rebuild-segment-arrays": {
         "action": "store_true", 
-        "help": "Create missing segment CSVs, arrays, and diagnostic plots.",
+        "help": "Regenerate segment CSVs, metadata, arrays, and diagnostic plots before optional training.",
     },
     "--segment-length": {"type": int, "default": 10, "help": "Consecutive TRs in each segment."},
     "--segment-stride": {"type": int, "default": 10, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
@@ -174,8 +179,8 @@ def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5):
 
 def save_responsive_intervals(windows, output_dir, max_gap=5):
     """Merge overlapping or touching responsive windows without splitting or trimming.
-
-    G_max is applied to individual windows only, as in analyze_responsiveness.py.
+    Save intervals as CSV.
+    G_max is applied to individual windows only.
     """
     interval_rows = []
     for (participant, run), run_windows in windows[windows["responsive"]].groupby(["participant", "run"]):
@@ -205,7 +210,6 @@ def save_responsive_intervals(windows, output_dir, max_gap=5):
     intervals.to_csv(output_dir / "responsive_intervals.csv", index=False)
     return intervals
 
-
 def get_centered_segments(start_TR, end_TR_exclusive, segment_length=10, stride=10, buffer=10):
     """Buffer both ends and center the segment grid, matching label_segments.py."""
     usable_start = int(start_TR) + buffer
@@ -219,7 +223,7 @@ def get_centered_segments(start_TR, end_TR_exclusive, segment_length=10, stride=
             for i in range(n_segments)]
 
 def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10):
-    """Buffer responsive intervals by 10 TRs at each end and center the segments."""
+    """Buffer responsive intervals by 10 TRs at each end and center the segments. Save the resulting segments as CSV."""
     if segment_length <= 0 or stride <= 0:
         raise ValueError("Segment length and stride must be positive")
     segment_dir = output_dir / f"TR={segment_length},SW={stride}"
@@ -239,7 +243,7 @@ def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10
     segments.to_csv(segment_dir / "responsive_segments.csv", index=False)
     return segments
 
-def save_nonresponsive_intervals(threshold=20):
+def save_nonresponsive_intervals(threshold=20, overwrite=False):
     """Generate and save bounded, end-of-run, and whole-run non-responsive intervals."""
     if threshold <= 0:
         raise ValueError("The non-responsive minimum gap must be positive")
@@ -273,12 +277,12 @@ def save_nonresponsive_intervals(threshold=20):
                (whole_runs, "non_responsive_whole_runs.csv"))
     for intervals, filename in outputs:
         path = output_dir / filename
-        if not path.exists():
+        if overwrite or not path.exists():
             intervals.to_csv(path, index=False)
     return bounded, end_intervals, whole_runs, output_dir
 
 def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, segment_length=10, stride=10):
-    """Buffer each non-responsive interval by 10 TRs per end and center segments."""
+    """Buffer each non-responsive interval by 10 TRs per end and center segments. Save the resulting segments as CSV."""
     if segment_length <= 0 or stride <= 0:
         raise ValueError("Segment length and stride must be positive")
     segment_dir = output_dir / f"TR={segment_length},SW={stride}"
@@ -306,43 +310,58 @@ def save_nonresponsive_segments(bounded, end_intervals, whole_runs, output_dir, 
     segments.to_csv(segment_dir / "nonresponsive_segments.csv", index=False)
     return segments
 
-def get_responsive_segments_path(args):
+def get_responsive_artifact_paths(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     TR, SW = args.segment_length, args.segment_stride
-    return CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}" / f"TR={TR},SW={SW}" / "responsive_segments.csv"
 
-def get_nonresponsive_segments_path(args):
+    responsiveness_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={W},S={S},N_min={N_min},G_max={G_max}")
+
+    responsive_segments_path = responsiveness_dir / f"TR={TR},SW={SW}" / "responsive_segments.csv"
+    responsive_windows_path = responsiveness_dir / "responsive_windows.csv"
+    responsive_intervals_path = responsiveness_dir / "responsive_intervals.csv"
+
+    return [responsive_segments_path, responsive_windows_path, responsive_intervals_path]
+
+def get_nonresponsive_artifact_paths(args):
     T_min = args.nonresponsive_min_gap
     TR, SW = args.segment_length, args.segment_stride
-    return CLASSIFIER_DIR / "non_responsiveness" / f"T_min={T_min}" / f"TR={TR},SW={SW}" / "nonresponsive_segments.csv"
+
+    nonresponsiveness_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={T_min}"
+
+    nonresponsive_segments_path = nonresponsiveness_dir / f"TR={TR},SW={SW}" / "nonresponsive_segments.csv"
+    nonresponsive_intervals_path = nonresponsiveness_dir / "non_responsive_intervals.csv"
+    nonresponsive_end_intervals_path = nonresponsiveness_dir / "non_responsive_end_intervals.csv"
+    nonresponsive_whole_runs_path = nonresponsiveness_dir / "non_responsive_whole_runs.csv"
+    
+    return [nonresponsive_segments_path, nonresponsive_intervals_path, nonresponsive_end_intervals_path, nonresponsive_whole_runs_path]
+
 
 def get_responsive_segments(args):
-    W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
-    responsive_dir = CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}"
-    windows_path = responsive_dir / "responsive_windows.csv"
-    if windows_path.exists():
-        responsive_windows = pd.read_csv(windows_path)
-    else:
-        responsive_windows, responsive_dir = save_responsive_windows(
-            W, S, N_min, G_max,
-        )
-    # Recompute downstream tables so pre-port split/trim and unbuffered caches cannot be reused.
-    responsive_intervals = save_responsive_intervals(responsive_windows, responsive_dir, G_max)
-    return save_responsive_segments(responsive_intervals, responsive_dir, args.segment_length, args.segment_stride)
+    responsive_artifact_paths = get_responsive_artifact_paths(args)
+
+    if args.rebuild_segment_arrays or not all(path.exists() for path in responsive_artifact_paths):
+        W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
+        TR, SW = args.segment_length, args.segment_stride
+        responsive_windows, responsive_dir = save_responsive_windows(W, S, N_min, G_max)
+        responsive_intervals = save_responsive_intervals(responsive_windows, responsive_dir, G_max)
+        scatter_responsive_intervals(responsive_intervals, RAW_DATA_DIR, responsive_dir)
+
+        return save_responsive_segments(responsive_intervals, responsive_dir, TR, SW)
+
+    return pd.read_csv(responsive_artifact_paths[0])
 
 def get_nonresponsive_segments(args):
-    nonresponsive_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={args.nonresponsive_min_gap}"
-    interval_paths = [nonresponsive_dir / name for name in
-                      ("non_responsive_intervals.csv", "non_responsive_end_intervals.csv", "non_responsive_whole_runs.csv")]
-    if all(path.exists() for path in interval_paths):
-        bounded, end_intervals, whole_runs = [pd.read_csv(path) for path in interval_paths]
-    else:
-        bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(
-            args.nonresponsive_min_gap
-        )
-    return save_nonresponsive_segments(
-        bounded, end_intervals, whole_runs, nonresponsive_dir, args.segment_length, args.segment_stride
-    )
+    nonresponsive_artifact_paths = get_nonresponsive_artifact_paths(args)
+
+    if args.rebuild_segment_arrays or not all(path.exists() for path in nonresponsive_artifact_paths):
+        T_min = args.nonresponsive_min_gap
+        TR, SW = args.segment_length, args.segment_stride
+        bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(T_min, overwrite=True)
+        scatter_non_responsive_intervals(bounded, whole_runs, end_intervals, RAW_DATA_DIR, nonresponsive_dir)
+
+        return save_nonresponsive_segments(bounded, end_intervals, whole_runs, nonresponsive_dir, TR, SW)
+
+    return pd.read_csv(nonresponsive_artifact_paths[0])
 
 def get_segment_dir_name(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
@@ -356,7 +375,7 @@ def get_segment_dir(args):
     return segment_dir
 
 def save_segment_metadata(args):
-    """Combine responsive and non-responsive segments, filter motion, and save metadata."""
+    """Save a CSV with all motion-free segments combining both responsive and non-responsive segments."""
     responsive_segments = get_responsive_segments(args)
     nonresponsive_segments = get_nonresponsive_segments(args)
 
@@ -372,60 +391,34 @@ def save_segment_metadata(args):
     return metadata
 
 def load_segment_metadata(args):
-    """Return all motion-free segments from both behavioral classes."""
+    """Returns a CSV with all motion-free segments from both behavioral classes. Rebuild if args.rebuild_segment_arrays is True or the CSV does not exist."""
     segment_dir = get_segment_dir(args)
     metadata_path = segment_dir / "all_segment_metadata.csv"
-    if metadata_path.exists():
-        return pd.read_csv(metadata_path)
-    return save_segment_metadata(args)
+    if args.rebuild_segment_arrays or not metadata_path.exists():
+        return save_segment_metadata(args)
+    return pd.read_csv(metadata_path)
 
 def save_segment_arrays(args):
-    """Create missing all-ROI inputs and labels using the cached metadata."""
+    """Save the X and y arrays for all segments and their metadata."""
     metadata = load_segment_metadata(args)
     segment_dir = get_segment_dir(args)
     lengths = metadata["segment_end_TR_exclusive"] - metadata["segment_start_TR"]
     if not (lengths == lengths.iloc[0]).all():
         raise ValueError("All segments must have the same length")
-    X_path, y_path = segment_dir / "X.npy", segment_dir / "y.npy"
-    if X_path.exists():
-        X = np.load(X_path)
-    else:
-        X = np.empty((len(metadata), int(lengths.iloc[0]), len(all_rois)), dtype=np.float32)
-        for (participant, run), run_metadata in metadata.groupby(["participant", "run"], sort=False):
-            run_data = np.column_stack([
-                np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in all_rois
-            ]).astype(np.float32, copy=False)
-            for segment_index, segment in run_metadata.iterrows():
-                start, end = int(segment["segment_start_TR"]), int(segment["segment_end_TR_exclusive"])
-                X[segment_index] = run_data[start:end]
-        np.save(X_path, X)
-    if y_path.exists():
-        y = np.load(y_path)
-    else:
-        y = metadata["label"].map({"responsive": 0.0, "non-responsive": 1.0}).to_numpy(dtype=np.float32)
-        np.save(y_path, y)
-    return X, y, metadata
 
-def save_missing_scatterplots(args, metadata):
-    """Create only missing interval and segment-count plots and their source CSVs."""
-    get_responsive_segments(args)
-    get_nonresponsive_segments(args)
-    W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
-    responsive_dir = CLASSIFIER_DIR / "responsiveness" / f"W={W},S={S},N_min={N_min},G_max={G_max}"
-    nonresponsive_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={args.nonresponsive_min_gap}"
-    segment_dir = get_segment_dir(args)
-    responsive_plot = responsive_dir / "responsive_intervals.png"
-    nonresponsive_plot = nonresponsive_dir / "nonresponsive_intervals.png"
-    segment_plot = segment_dir / "segment_counts.png"
-    if not responsive_plot.exists():
-        scatter_responsive_intervals(pd.read_csv(responsive_dir / "responsive_intervals.csv"), RAW_DATA_DIR, responsive_dir)
-    if not nonresponsive_plot.exists():
-        bounded = pd.read_csv(nonresponsive_dir / "non_responsive_intervals.csv")
-        end_intervals = pd.read_csv(nonresponsive_dir / "non_responsive_end_intervals.csv")
-        whole_runs = pd.read_csv(nonresponsive_dir / "non_responsive_whole_runs.csv")
-        scatter_non_responsive_intervals(bounded, whole_runs, end_intervals, RAW_DATA_DIR, nonresponsive_dir)
-    if not segment_plot.exists():
-        scatter_segement_counts(metadata, RAW_DATA_DIR, segment_dir)
+    X = np.empty((len(metadata), int(lengths.iloc[0]), len(all_rois)), dtype=np.float32)
+    for (participant, run), run_metadata in metadata.groupby(["participant", "run"], sort=False):
+        run_data = np.column_stack([
+            np.load(RAW_DATA_DIR / participant / run / "z_scored" / f"{roi}.npy") for roi in all_rois
+        ]).astype(np.float32, copy=False)
+        for segment_index, segment in run_metadata.iterrows():
+            start, end = int(segment["segment_start_TR"]), int(segment["segment_end_TR_exclusive"])
+            X[segment_index] = run_data[start:end]
+    np.save(segment_dir / "X.npy", X)
+
+    y = metadata["label"].map({"responsive": 0.0, "non-responsive": 1.0}).to_numpy(dtype=np.float32)
+    np.save(segment_dir / "y.npy", y)
+    return X, y, metadata
 
 def load_segments(args):
     """Load the all-ROI cache and select the requested ROI columns."""
@@ -433,14 +426,13 @@ def load_segments(args):
     array_paths = [segment_dir / name for name in ("X.npy", "y.npy")]
     metadata_path = segment_dir / "all_segment_metadata.csv"
     cache_paths = [*array_paths, metadata_path]
-    if not all(path.exists() for path in cache_paths):
-        print("Building segment arrays:")
+    
+    if args.rebuild_segment_arrays or not all(path.exists() for path in cache_paths):
         X, y, metadata = save_segment_arrays(args)
+        scatter_segement_counts(metadata, RAW_DATA_DIR, segment_dir)
     else:
         X, y = np.load(array_paths[0]), np.load(array_paths[1])
         metadata = pd.read_csv(metadata_path).reset_index(drop=True)
-    if args.rebuild_segment_arrays:
-        save_missing_scatterplots(args, metadata)
     roi_indices = [all_rois.index(roi) for roi in args.rois]
     return X[:, :, roi_indices], y, metadata
 
@@ -604,6 +596,7 @@ def run_analysis(args):
     """Run all folds and save fold-level results and segment predictions."""
     set_seed(args.seed)
     X, y, metadata = load_segments(args)
+    print(metadata.groupby("label").size().rename("segment_count"))
     participants = metadata["participant"].astype(str).to_numpy()
     dataset = ArousalDataset(X, y)
     folds = get_folds(X, y, participants, metadata, args.analysis)
@@ -672,16 +665,83 @@ def run_analysis(args):
 
 def main():
     args = parse_args()
-    if args.run_training:
+    if args.summarize:
+        summarize()
+    elif args.run_training:
         print(f"Using device: {DEVICE}")
         print(f"Analysis: {args.analysis}")
         print(f"Selected ({len(args.rois)}) ROIs: {args.roi_label}")
         print(f"Running training for: {get_segment_dir_name(args)}")
         run_analysis(args)
     elif args.rebuild_segment_arrays:
-        print(f"Ensuring segment artifacts exist for: {get_segment_dir_name(args)}")
+        print(f"Rebuilding segment artifacts for: {get_segment_dir_name(args)}")
         _, _, metadata = load_segments(args)
-        print(metadata.groupby("label").size().rename("segment_count"))
+
+def parse_folder_name(folder_name):
+    """Return settings details as a dictionary from a segment-configuration folder name."""
+    pattern = (r"R\(W=(\d+),S=(\d+),N_min=(\d+),G_max=(\d+)\):"
+               r"NR\(T_min=(\d+)\):Segment\(TR=(\d+),SW=(\d+)\)")
+    match = re.fullmatch(pattern, folder_name)
+    if not match:
+        raise ValueError(f"Unrecognized segment folder name: {folder_name}")
+    names = ["responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
+             "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride"]
+    return dict(zip(names, map(int, match.groups())))
+
+def summarize():
+    """Combine completed classifier runs into result tables.
+
+    Output mirrors each ``ROI/model/analysis`` path found below ``segments``. Its
+    ``summary.csv`` has one row per segment setup, while ``all_folds.csv`` has one
+    row per cross-validation fold. Incomplete setups without both result CSVs are
+    skipped.
+
+    Returns:
+        List of result directories written. This is useful when calling the
+        function from a notebook or another script.
+    """
+    segments_dir = CLASSIFIER_DIR / "segments"
+    all_participants = set(get_run_inventory()["participant"].astype(str))
+    tables = {}
+
+    for segment_dir in sorted(path for path in segments_dir.iterdir() if path.is_dir()):
+        settings = parse_folder_name(segment_dir.name)
+        metadata_file = segment_dir / "all_segment_metadata.csv"
+        if not metadata_file.exists():
+            continue
+
+        metadata = pd.read_csv(metadata_file)
+        label_counts = metadata["label"].value_counts()
+        counts = {
+            "n_segments": len(metadata),
+            "n_responsive": int(label_counts.get("responsive", 0)),
+            "n_nonresponsive": int(label_counts.get("non-responsive", 0)),
+            "missing_participants": ",".join(sorted(all_participants - set(metadata["participant"].astype(str)))),
+        }
+
+        for summary_file in segment_dir.glob("*/*/*/*_summary.csv"):
+            result_dir = summary_file.parent
+            prefix = summary_file.name.removesuffix("_summary.csv")
+            folds_file = result_dir / f"{prefix}_fold_results.csv"
+            if not folds_file.exists():
+                continue
+
+            relative_dir = result_dir.relative_to(segment_dir)
+            table = tables.setdefault(relative_dir, {"summaries": [], "folds": []})
+            summary_row = pd.read_csv(summary_file).iloc[0].to_dict()
+            table["summaries"].append({**settings, **counts, **summary_row})
+            folds = pd.read_csv(folds_file)
+            table["folds"].append(folds.assign(**settings))
+
+    written_dirs = []
+    for relative_dir, table in tables.items():
+        output_dir = CLASSIFIER_DIR / "results" / relative_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(table["summaries"]).to_csv(output_dir / "summary.csv", index=False)
+        pd.concat(table["folds"], ignore_index=True).to_csv(output_dir / "all_folds.csv", index=False)
+        written_dirs.append(output_dir)
+    return written_dirs
+
 
 
 if __name__ == "__main__":
