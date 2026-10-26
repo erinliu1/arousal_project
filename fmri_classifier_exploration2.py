@@ -62,6 +62,10 @@ ARGUMENT_SPECS = {
     "--responsive-window-stride": {"type": int, "default": 10, "help": "TR step between responsive windows."},
     "--responsive-min-bp-trs": {"type": int, "default": 8, "help": "Minimum BP-containing TRs per responsive window."},
     "--responsive-max-bp-gap": {"type": int, "default": 5, "help": "Maximum BP-free gap within a responsive window."},
+    "--trim-responsive-intervals": {
+        "action": "store_true",
+        "help": "Split merged responsive intervals at inter-BP gaps greater than G_max and trim empty TRs at each split.",
+    },
 
     "--nonresponsive-min-gap": {"type": int, "default": 20, "help": "Minimum BP-free interval duration in TRs."},
 }
@@ -177,10 +181,10 @@ def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5):
     windows.to_csv(output_dir / "responsive_windows.csv", index=False)
     return windows, output_dir
 
-def save_responsive_intervals(windows, output_dir, max_gap=5):
-    """Merge overlapping or touching responsive windows without splitting or trimming.
-    Save intervals as CSV.
-    G_max is applied to individual windows only.
+def save_responsive_intervals(windows, output_dir, max_gap=5, trim=False):
+    """Merge qualifying windows, optionally split/trim at long inter-BP gaps.
+
+    With trim=False, G_max is applied to individual windows only.
     """
     interval_rows = []
     for (participant, run), run_windows in windows[windows["responsive"]].groupby(["participant", "run"]):
@@ -207,8 +211,34 @@ def save_responsive_intervals(windows, output_dir, max_gap=5):
         })
     columns = ["participant", "run", "start_TR", "end_TR", "duration_TRs", "max_within_window_gap"]
     intervals = pd.DataFrame(interval_rows, columns=columns)
+    if trim:
+        intervals = split_responsive_intervals(intervals, max_gap)
+    output_dir.mkdir(parents=True, exist_ok=True)
     intervals.to_csv(output_dir / "responsive_intervals.csv", index=False)
     return intervals
+
+def split_responsive_intervals(intervals, max_gap):
+    """Split at BP-index differences > max_gap; retain BPs on both split sides.
+
+    Original outer boundaries are preserved. Only empty TRs bordering an
+    internal split are removed; end_TR remains exclusive.
+    """
+    rows = []
+    for (participant, run), run_intervals in intervals.groupby(["participant", "run"]):
+        bps = np.unique(np.load(RAW_DATA_DIR / str(participant) / str(run) / "bp_TRs.npy"))
+        for interval in run_intervals.itertuples(index=False):
+            presses = bps[(bps >= interval.start_TR) & (bps < interval.end_TR)]
+            cuts = np.flatnonzero(np.diff(presses) > max_gap)
+            starts = [int(interval.start_TR)] + [int(presses[i + 1]) for i in cuts]
+            ends = [int(presses[i]) + 1 for i in cuts] + [int(interval.end_TR)]
+            for start, end in zip(starts, ends):
+                kept = presses[(presses >= start) & (presses < end)]
+                rows.append({
+                    "participant": participant, "run": run,
+                    "start_TR": start, "end_TR": end, "duration_TRs": end - start,
+                    "max_within_window_gap": int(np.diff(np.r_[start, kept, end]).max()),
+                })
+    return pd.DataFrame(rows, columns=intervals.columns)
 
 def get_centered_segments(start_TR, end_TR_exclusive, segment_length=10, stride=10, buffer=10):
     """Buffer both ends and center the segment grid, matching label_segments.py."""
@@ -222,11 +252,11 @@ def get_centered_segments(start_TR, end_TR_exclusive, segment_length=10, stride=
     return [(first_start + i * stride, first_start + i * stride + segment_length)
             for i in range(n_segments)]
 
-def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10):
+def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10, trim=False):
     """Buffer responsive intervals by 10 TRs at each end and center the segments. Save the resulting segments as CSV."""
     if segment_length <= 0 or stride <= 0:
         raise ValueError("Segment length and stride must be positive")
-    segment_dir = output_dir / f"TR={segment_length},SW={stride}"
+    segment_dir = output_dir / (f"TR={segment_length},SW={stride}" + (",trim" if trim else ""))
     segment_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for interval in intervals.itertuples(index=False):
@@ -316,9 +346,10 @@ def get_responsive_artifact_paths(args):
 
     responsiveness_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={W},S={S},N_min={N_min},G_max={G_max}")
 
-    responsive_segments_path = responsiveness_dir / f"TR={TR},SW={SW}" / "responsive_segments.csv"
+    segment_dir = responsiveness_dir / (f"TR={TR},SW={SW}" + (",trim" if args.trim_responsive_intervals else ""))
+    responsive_segments_path = segment_dir / "responsive_segments.csv"
     responsive_windows_path = responsiveness_dir / "responsive_windows.csv"
-    responsive_intervals_path = responsiveness_dir / "responsive_intervals.csv"
+    responsive_intervals_path = (segment_dir if args.trim_responsive_intervals else responsiveness_dir) / "responsive_intervals.csv"
 
     return [responsive_segments_path, responsive_windows_path, responsive_intervals_path]
 
@@ -343,10 +374,13 @@ def get_responsive_segments(args):
         W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
         TR, SW = args.segment_length, args.segment_stride
         responsive_windows, responsive_dir = save_responsive_windows(W, S, N_min, G_max)
-        responsive_intervals = save_responsive_intervals(responsive_windows, responsive_dir, G_max)
-        scatter_responsive_intervals(responsive_intervals, RAW_DATA_DIR, responsive_dir)
+        interval_dir = responsive_artifact_paths[2].parent
+        responsive_intervals = save_responsive_intervals(
+            responsive_windows, interval_dir, G_max, trim=args.trim_responsive_intervals
+        )
+        scatter_responsive_intervals(responsive_intervals, RAW_DATA_DIR, interval_dir)
 
-        return save_responsive_segments(responsive_intervals, responsive_dir, TR, SW)
+        return save_responsive_segments(responsive_intervals, responsive_dir, TR, SW, trim=args.trim_responsive_intervals)
 
     return pd.read_csv(responsive_artifact_paths[0])
 
@@ -367,7 +401,8 @@ def get_segment_dir_name(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     T_min = args.nonresponsive_min_gap
     TR, SW = args.segment_length, args.segment_stride
-    return f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW})"
+    suffix = ",trim" if args.trim_responsive_intervals else ""
+    return f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW}{suffix})"
 
 def get_segment_dir(args):
     segment_dir = CLASSIFIER_DIR / "segments" / get_segment_dir_name(args)
@@ -681,13 +716,14 @@ def main():
 def parse_folder_name(folder_name):
     """Return settings details as a dictionary from a segment-configuration folder name."""
     pattern = (r"R\(W=(\d+),S=(\d+),N_min=(\d+),G_max=(\d+)\):"
-               r"NR\(T_min=(\d+)\):Segment\(TR=(\d+),SW=(\d+)\)")
+               r"NR\(T_min=(\d+)\):Segment\(TR=(\d+),SW=(\d+)(,trim)?\)")
     match = re.fullmatch(pattern, folder_name)
     if not match:
         raise ValueError(f"Unrecognized segment folder name: {folder_name}")
     names = ["responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
              "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride"]
-    return dict(zip(names, map(int, match.groups())))
+    return {**dict(zip(names, map(int, match.groups()[:7]))),
+            "trim": bool(match.group(8))}
 
 def summarize():
     """Combine completed classifier runs into result tables.
