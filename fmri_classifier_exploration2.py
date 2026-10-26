@@ -732,8 +732,9 @@ def summarize():
 
     Output mirrors each ``ROI/model/analysis`` path found below ``segments``. Its
     ``summary.csv`` has one row per segment setup, while ``all_folds.csv`` has one
-    row per cross-validation fold. Incomplete setups without both result CSVs are
-    skipped.
+    row per cross-validation fold. ``results/<ROI>/cross_model_summary.csv`` combines
+    all summary rows with ROI, model, analysis, and optimizer settings.
+    Incomplete setups without both result CSVs are skipped.
 
     Returns:
         List of result directories written. This is useful when calling the
@@ -774,12 +775,26 @@ def summarize():
             table["folds"].append(folds.assign(**settings))
 
     written_dirs = []
+    cross_model_rows = []
     for relative_dir, table in tables.items():
+        roi, model_folder, analysis = relative_dir.parts
+        model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
+        model_columns = {
+            "roi": roi, "model": model_settings["model"], "analysis": analysis.lower(),
+            "epochs": int(model_settings["epochs"]), "batch": int(model_settings["batch"]),
+            "LR": float(model_settings["LR"]), "WED": float(model_settings.get("WD", 0)),
+        }
+        cross_model_rows.extend({**row, **model_columns} for row in table["summaries"])
         output_dir = CLASSIFIER_DIR / "results" / relative_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(table["summaries"]).to_csv(output_dir / "summary.csv", index=False)
         pd.concat(table["folds"], ignore_index=True).to_csv(output_dir / "all_folds.csv", index=False)
         written_dirs.append(output_dir)
+    if cross_model_rows:
+        for roi, rows in pd.DataFrame(cross_model_rows).groupby("roi", sort=False):
+            rows.to_csv(
+                CLASSIFIER_DIR / "results" / roi / "cross_model_summary.csv", index=False
+            )
     return written_dirs
 
 
