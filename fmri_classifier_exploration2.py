@@ -50,7 +50,9 @@ ARGUMENT_SPECS = {
     "--epochs": {"type": int, "default": 30, "help": "Training passes through each fold."},
     "--batch-size": {"type": int, "default": 32, "help": "Segments per training batch."},
     "--learning-rate": {"type": float, "default": 1e-3, "help": "Adam optimizer learning rate."},
-    "--weight-decay": {"type": float, "default": 1e-4, "help": "Adam optimizer L2 regularization."},
+    "--weight-decay": {"type": float, "default": 1e-3, "help": "Adam optimizer L2 regularization."},
+    "--hidden-size": {"type": int, "default": 32, "help": "GRU hidden state size."},
+    "--dropout": {"type": float, "default": 0.2, "help": "Dropout probability before the output layer."},
 
     "--rebuild-segment-arrays": {
         "action": "store_true", 
@@ -521,12 +523,12 @@ class ParticipantClassBalancedSampler(Sampler):
 class ArousalGRU(nn.Module):
     """Classify an ROI time series using its final GRU hidden state."""
 
-    def __init__(self, n_rois):
+    def __init__(self, n_rois, hidden_size=32, dropout=0.2):
         """Create the recurrent, dropout, and output layers."""
         super().__init__()
-        self.gru = nn.GRU(n_rois, 32, batch_first=True)
-        self.dropout = nn.Dropout(0.2)
-        self.fc = nn.Linear(32, 1)
+        self.gru = nn.GRU(n_rois, hidden_size, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
         """Return one non-responsiveness logit per segment."""
@@ -583,7 +585,7 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=sampler)
     train_evaluation_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(Subset(dataset, test_indices), batch_size=args.batch_size, shuffle=False)
-    model = ArousalGRU(dataset.X.shape[-1]).to(DEVICE)
+    model = ArousalGRU(dataset.X.shape[-1], args.hidden_size, args.dropout).to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
@@ -623,7 +625,8 @@ def format_learning_rate(learning_rate):
 
 def output_settings(args):
     """Return the config/ROI/model/analysis results directory and filename prefix."""
-    model_dir = (f"model=GRU,epochs={args.epochs},batch={args.batch_size},"
+    model_dir = (f"model=GRU,hidden={args.hidden_size},drop={args.dropout},"
+                 f"epochs={args.epochs},batch={args.batch_size},"
                  f"LR={format_learning_rate(args.learning_rate)},WD={format_learning_rate(args.weight_decay)}")
     save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper() / f"SEED={args.seed}"
     return save_dir, args.analysis
@@ -768,7 +771,10 @@ def summarize():
             model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
             seed = seed_folder.removeprefix("SEED=")
             identifiers = {
-                "model": model_settings["model"], "epochs": int(model_settings["epochs"]),
+                "model": model_settings["model"],
+                "hidden": int(model_settings.get("hidden", 32)),
+                "drop": float(model_settings.get("drop", 0.2)),
+                "epochs": int(model_settings["epochs"]),
                 "batch": int(model_settings["batch"]), "lr": float(model_settings["LR"]),
                 "wd": float(model_settings.get("WD", 0)), "analysis": analysis.lower(),
                 "seed": int(seed) if seed.isdigit() else seed,
@@ -778,7 +784,7 @@ def summarize():
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
         "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
-        "model", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
+        "model", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy", "fold_averaged_accuracy",
         "responsive_recall", "nonresponsive_recall", "balanced_test_accuracy",
     ]
