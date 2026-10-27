@@ -62,7 +62,7 @@ ARGUMENT_SPECS = {
     "--responsive-window-size": {"type": int, "default": 30, "help": "Responsive sliding-window width in TRs."},
     "--responsive-window-stride": {"type": int, "default": 1, "help": "TR step between responsive windows."},
     "--responsive-min-bp-trs": {"type": int, "default": 8, "help": "Minimum BP-containing TRs per responsive window."},
-    "--responsive-max-bp-gap": {"type": int, "default": 5, "help": "Maximum BP-free gap within a responsive window."},
+    "--responsive-max-bp-gap": {"type": int, "default": 4, "help": "Maximum BP-free gap within a responsive window."},
     "--trim-responsive-intervals": {
         "action": "store_true",
         "help": "Split merged responsive intervals at inter-BP gaps greater than G_max and trim empty TRs at each split.",
@@ -769,7 +769,7 @@ def summarize():
             seed = seed_folder.removeprefix("SEED=")
             identifiers = {
                 "model": model_settings["model"], "epochs": int(model_settings["epochs"]),
-                "bach": int(model_settings["batch"]), "lr": float(model_settings["LR"]),
+                "batch": int(model_settings["batch"]), "lr": float(model_settings["LR"]),
                 "wd": float(model_settings.get("WD", 0)), "analysis": analysis.lower(),
                 "seed": int(seed) if seed.isdigit() else seed,
             }
@@ -778,7 +778,7 @@ def summarize():
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
         "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
-        "model", "epochs", "bach", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
+        "model", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy", "fold_averaged_accuracy",
         "responsive_recall", "nonresponsive_recall", "balanced_test_accuracy",
     ]
