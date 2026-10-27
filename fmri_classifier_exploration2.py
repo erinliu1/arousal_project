@@ -56,11 +56,11 @@ ARGUMENT_SPECS = {
         "action": "store_true", 
         "help": "Regenerate segment CSVs, metadata, arrays, and diagnostic plots before optional training.",
     },
-    "--segment-length": {"type": int, "default": 10, "help": "Consecutive TRs in each segment."},
-    "--segment-stride": {"type": int, "default": 10, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
+    "--segment-length": {"type": int, "default": 40, "help": "Consecutive TRs in each segment."},
+    "--segment-stride": {"type": int, "default": 40, "help": "TR step between segment starts; use segment length for non-overlapping segments."},
 
     "--responsive-window-size": {"type": int, "default": 30, "help": "Responsive sliding-window width in TRs."},
-    "--responsive-window-stride": {"type": int, "default": 10, "help": "TR step between responsive windows."},
+    "--responsive-window-stride": {"type": int, "default": 1, "help": "TR step between responsive windows."},
     "--responsive-min-bp-trs": {"type": int, "default": 8, "help": "Minimum BP-containing TRs per responsive window."},
     "--responsive-max-bp-gap": {"type": int, "default": 5, "help": "Maximum BP-free gap within a responsive window."},
     "--trim-responsive-intervals": {
@@ -625,7 +625,7 @@ def output_settings(args):
     """Return the config/ROI/model/analysis results directory and filename prefix."""
     model_dir = (f"model=GRU,epochs={args.epochs},batch={args.batch_size},"
                  f"LR={format_learning_rate(args.learning_rate)},WD={format_learning_rate(args.weight_decay)}")
-    save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper()
+    save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper() / f"SEED={args.seed}"
     return save_dir, args.analysis
 
 
@@ -728,21 +728,17 @@ def parse_folder_name(folder_name):
             "trim": bool(match.group(8))}
 
 def summarize():
-    """Combine completed classifier runs into result tables.
+    """Write one summary of all completed experiments per ROI selection.
 
-    Output mirrors each ``ROI/model/analysis`` path found below ``segments``. Its
-    ``summary.csv`` has one row per segment setup, while ``all_folds.csv`` has one
-    row per cross-validation fold. ``results/<ROI>/cross_model_summary.csv`` combines
-    all summary rows with ROI, model, analysis, and optimizer settings.
-    Incomplete setups without both result CSVs are skipped.
+    Each ``results/<ROI>_summary.csv`` row identifies a seeded experiment below
+    ``segments``. Incomplete experiments without summary and fold CSVs are skipped.
 
     Returns:
-        List of result directories written. This is useful when calling the
+        List of summary files written. This is useful when calling the
         function from a notebook or another script.
     """
     segments_dir = CLASSIFIER_DIR / "segments"
-    all_participants = set(get_run_inventory()["participant"].astype(str))
-    tables = {}
+    rows_by_roi = {}
 
     for segment_dir in sorted(path for path in segments_dir.iterdir() if path.is_dir()):
         settings = parse_folder_name(segment_dir.name)
@@ -756,46 +752,44 @@ def summarize():
             "n_segments": len(metadata),
             "n_responsive": int(label_counts.get("responsive", 0)),
             "n_nonresponsive": int(label_counts.get("non-responsive", 0)),
-            "missing_participants": ",".join(sorted(all_participants - set(metadata["participant"].astype(str)))),
         }
 
-        for summary_file in segment_dir.glob("*/*/*/*_summary.csv"):
+        for summary_file in segment_dir.glob("*/*/*/SEED=*/*_summary.csv"):
             result_dir = summary_file.parent
             prefix = summary_file.name.removesuffix("_summary.csv")
             folds_file = result_dir / f"{prefix}_fold_results.csv"
             if not folds_file.exists():
                 continue
 
-            relative_dir = result_dir.relative_to(segment_dir)
-            table = tables.setdefault(relative_dir, {"summaries": [], "folds": []})
+            roi, model_folder, analysis, seed_folder = result_dir.relative_to(segment_dir).parts
             summary_row = pd.read_csv(summary_file).iloc[0].to_dict()
             folds = pd.read_csv(folds_file)
             summary_row["fold_averaged_accuracy"] = folds["test_accuracy"].mean()
-            table["summaries"].append({**settings, **counts, **summary_row})
-            table["folds"].append(folds.assign(**settings))
+            model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
+            seed = seed_folder.removeprefix("SEED=")
+            identifiers = {
+                "model": model_settings["model"], "epochs": int(model_settings["epochs"]),
+                "bach": int(model_settings["batch"]), "lr": float(model_settings["LR"]),
+                "wd": float(model_settings.get("WD", 0)), "analysis": analysis.lower(),
+                "seed": int(seed) if seed.isdigit() else seed,
+            }
+            rows_by_roi.setdefault(roi, []).append({**settings, **identifiers, **counts, **summary_row})
 
-    written_dirs = []
-    cross_model_rows = []
-    for relative_dir, table in tables.items():
-        roi, model_folder, analysis = relative_dir.parts
-        model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
-        model_columns = {
-            "roi": roi, "model": model_settings["model"], "analysis": analysis.lower(),
-            "epochs": int(model_settings["epochs"]), "batch": int(model_settings["batch"]),
-            "LR": float(model_settings["LR"]), "WED": float(model_settings.get("WD", 0)),
-        }
-        cross_model_rows.extend({**row, **model_columns} for row in table["summaries"])
-        output_dir = CLASSIFIER_DIR / "results" / relative_dir
+    columns = [
+        "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
+        "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
+        "model", "epochs", "bach", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
+        "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy", "fold_averaged_accuracy",
+        "responsive_recall", "nonresponsive_recall", "balanced_test_accuracy",
+    ]
+    written_files = []
+    for roi, rows in rows_by_roi.items():
+        output_dir = CLASSIFIER_DIR / "results"
         output_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(table["summaries"]).to_csv(output_dir / "summary.csv", index=False)
-        pd.concat(table["folds"], ignore_index=True).to_csv(output_dir / "all_folds.csv", index=False)
-        written_dirs.append(output_dir)
-    if cross_model_rows:
-        for roi, rows in pd.DataFrame(cross_model_rows).groupby("roi", sort=False):
-            rows.to_csv(
-                CLASSIFIER_DIR / "results" / roi / "cross_model_summary.csv", index=False
-            )
-    return written_dirs
+        output_file = output_dir / f"{roi}_summary.csv"
+        pd.DataFrame(rows).reindex(columns=columns).sort_values(columns).to_csv(output_file, index=False)
+        written_files.append(output_file)
+    return written_files
 
 
 
