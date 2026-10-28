@@ -33,6 +33,10 @@ ARGUMENT_SPECS = {
         "action": "store_true", 
         "help": "Train and save predictions; otherwise only show the settings.",
     },
+    "--pooling": {
+        "choices": ("final", "mean"), "default": "final",
+        "help": "Use the final GRU hidden state or the mean over all time steps.",
+    },
     "--summarize": {
         "action": "store_true",
         "help": "Collect all completed classifier runs into CSV files under the results folder.",
@@ -521,19 +525,21 @@ class ParticipantClassBalancedSampler(Sampler):
         return self.n_samples
 
 class ArousalGRU(nn.Module):
-    """Classify an ROI time series using its final GRU hidden state."""
+    """Classify an ROI time series using final or mean GRU pooling."""
 
-    def __init__(self, n_rois, hidden_size=32, dropout=0.2):
+    def __init__(self, n_rois, hidden_size=32, dropout=0.2, pooling="final"):
         """Create the recurrent, dropout, and output layers."""
         super().__init__()
         self.gru = nn.GRU(n_rois, hidden_size, batch_first=True)
+        self.pooling = pooling
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
         """Return one non-responsiveness logit per segment."""
-        _, hidden = self.gru(x)
-        return self.fc(self.dropout(hidden[-1])).squeeze(-1)
+        output, hidden = self.gru(x)
+        pooled = output.mean(dim=1) if self.pooling == "mean" else hidden[-1]
+        return self.fc(self.dropout(pooled)).squeeze(-1)
 
 def evaluate_model(model, loader):
     """Return accuracy, labels, predictions, and probabilities for a loader."""
@@ -585,7 +591,7 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=sampler)
     train_evaluation_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(Subset(dataset, test_indices), batch_size=args.batch_size, shuffle=False)
-    model = ArousalGRU(dataset.X.shape[-1], args.hidden_size, args.dropout).to(DEVICE)
+    model = ArousalGRU(dataset.X.shape[-1], args.hidden_size, args.dropout, args.pooling).to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
@@ -625,7 +631,7 @@ def format_learning_rate(learning_rate):
 
 def output_settings(args):
     """Return the config/ROI/model/analysis results directory and filename prefix."""
-    model_dir = (f"model=GRU,hidden={args.hidden_size},drop={args.dropout},"
+    model_dir = (f"model=GRU,pool={args.pooling},hidden={args.hidden_size},drop={args.dropout},"
                  f"epochs={args.epochs},batch={args.batch_size},"
                  f"LR={format_learning_rate(args.learning_rate)},WD={format_learning_rate(args.weight_decay)}")
     save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper() / f"SEED={args.seed}"
@@ -772,6 +778,7 @@ def summarize():
             seed = seed_folder.removeprefix("SEED=")
             identifiers = {
                 "model": model_settings["model"],
+                "pool": model_settings.get("pool", "final"),
                 "hidden": int(model_settings.get("hidden", 32)),
                 "drop": float(model_settings.get("drop", 0.2)),
                 "epochs": int(model_settings["epochs"]),
@@ -784,7 +791,7 @@ def summarize():
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
         "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
-        "model", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
+        "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy", "fold_averaged_accuracy",
         "responsive_recall", "nonresponsive_recall", "balanced_test_accuracy",
     ]
