@@ -807,4 +807,7 @@ def summarize():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    df = pd.read_csv(CLASSIFIER_DIR / "results" / "all_rois_summary.csv")
+
+    df.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore.csv", index=False)

@@ -23,16 +23,16 @@ conda_init
 conda activate pytorch_env
 cd "$PROJECT_DIR"
 
-SEEDS=(4 123 456 789 2026)
+SEEDS=(42 123 456 789 2026)
 TASK_ID=$SLURM_ARRAY_TASK_ID
 SEED=${SEEDS[$TASK_ID]}
 
 echo "Node: $SLURM_NODELIST"
-echo "Task: $TASK_ID | Analysis: lopo | Pooling: mean | Seed: $SEED | Trim: enabled"
+echo "Task: $TASK_ID | Analysis: loro | Pooling: mean | Seed: $SEED | Trim: enabled"
 
 python -u fmri_classifier_exploration2.py \
     --run-training \
     --pooling mean \
     --trim-responsive-intervals \
-    --analysis lopo \
+    --analysis loro \
     --seed "$SEED"
