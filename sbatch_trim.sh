@@ -27,15 +27,18 @@ ANALYSES=(lopo loro)
 SEEDS=(123 456 789 2026)
 
 TASK_ID=$SLURM_ARRAY_TASK_ID
-ANALYSIS=${ANALYSES[$((TASK_ID / 4))]}
-SEED=${SEEDS[$((TASK_ID % 4))]}
+
+ANALYSIS_ID=$((TASK_ID / 4))
+SEED_ID=$((TASK_ID % 4))
+
+ANALYSIS=${ANALYSES[$ANALYSIS_ID]}
+SEED=${SEEDS[$SEED_ID]}
 
 echo "Node: $SLURM_NODELIST"
-echo "Task: $TASK_ID | Analysis: $ANALYSIS | Dropout: 0.4 | Seed: $SEED | Trim: enabled"
+echo "Task: $TASK_ID | Analysis: $ANALYSIS | Dropout: 0.2 | Seed: $SEED | Trim: disabled"
 
 python -u fmri_classifier_exploration2.py \
     --run-training \
     --analysis "$ANALYSIS" \
-    --dropout 0.4 \
-    --trim-responsive-intervals \
+    --dropout 0.2 \
     --seed "$SEED"

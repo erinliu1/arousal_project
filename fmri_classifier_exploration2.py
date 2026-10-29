@@ -807,7 +807,9 @@ def summarize():
 
 
 if __name__ == "__main__":
-    # main()
-    df = pd.read_csv(CLASSIFIER_DIR / "results" / "all_rois_summary.csv")
-
-    df.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore.csv", index=False)
+    main()
+    # df = pd.read_csv(CLASSIFIER_DIR / "results" / "all_rois_summary.csv")
+    # # filter by G_max = 4 and trim False
+    # df = df[df["responsive_max_bp_gap"] == 4]
+    # df = df[df["trim"] == False]
+    # df.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore.csv", index=False)
