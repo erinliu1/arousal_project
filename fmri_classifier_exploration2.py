@@ -809,7 +809,16 @@ def summarize():
 if __name__ == "__main__":
     main()
     # df = pd.read_csv(CLASSIFIER_DIR / "results" / "all_rois_summary.csv")
-    # # filter by G_max = 4 and trim False
+
     # df = df[df["responsive_max_bp_gap"] == 4]
     # df = df[df["trim"] == False]
-    # df.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore.csv", index=False)
+    # df = df[df["drop"] == 0.2]
+    # df = df[df["hidden"] == 32]
+    # df = df[df["wd"] == 0.001]
+    # df = df[df["pool"] == "final"]
+    # df_lopo = df[df["analysis"] == "lopo"]
+
+    # df_lopo.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore_lopo.csv", index=False)
+    # df_loro = df[df["analysis"] == "loro"]
+    # df_loro.to_csv(CLASSIFIER_DIR / "results" / "all_rois_summary_explore_loro.csv", index=False)
+    # print(df_lopo['balanced_test_accuracy'].mean())
