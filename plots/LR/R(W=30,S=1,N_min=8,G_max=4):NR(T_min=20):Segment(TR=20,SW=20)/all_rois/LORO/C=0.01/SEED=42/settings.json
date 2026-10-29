@@ -43,10 +43,10 @@
     "VLp",
     "VPL"
   ],
-  "analysis": "lopo",
+  "analysis": "loro",
   "seed": 42,
-  "segment_length": 40,
-  "segment_stride": 40,
+  "segment_length": 20,
+  "segment_stride": 20,
   "responsive_window_size": 30,
   "responsive_window_stride": 1,
   "responsive_min_bp_trs": 8,
@@ -54,15 +54,7 @@
   "trim_responsive_intervals": false,
   "nonresponsive_min_gap": 20,
   "rebuild_segment_arrays": false,
-  "c_grid": [
-    0.001,
-    0.01,
-    0.1,
-    1.0,
-    10.0,
-    100.0
-  ],
-  "inner_splits": 5,
+  "c": 0.01,
   "max_iter": 5000,
   "roi_label": "all_rois",
   "features": [
@@ -74,6 +66,6 @@
   "solver": "lbfgs",
   "threshold": 0.5,
   "weighting": "equal participants, then available classes",
-  "inner_selection": "group-averaged balanced accuracy",
+  "regularization_selection": "fixed C; no inner cross-validation",
   "note": "Deterministic fits; seeds do not represent independent repetitions."
 }

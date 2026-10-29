@@ -3,9 +3,11 @@
 Run from the project directory in the GRU training environment:
     python LR.py
     python LR.py --segment-length 50 --segment-stride 50
-    python LR.py --analysis loro --trim-responsive-intervals
+    python LR.py --analysis loro
+    python LR.py --C 0.01
 
-Outputs go to plots/LR/<segment configuration>/<ROI selection>/<analysis>/SEED=*.
+Uses a fixed L2 regularization C (default 0.01) in every outer fold.
+Outputs: plots/LR/<segment configuration>/<ROI selection>/<analysis>/C=*/SEED=*.
 Missing segment caches are built by the existing GRU data loader, requiring the
 original raw_data/<participant>/<run>/z_scored/<ROI>.npy files.
 No GPU training is needed, but the shared loader imports the GRU dependencies.
@@ -21,7 +23,6 @@ import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score
-from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
 from fmri_classifier_exploration2 import (
@@ -43,18 +44,14 @@ def parse_args():
     for flag in shared:
         parser.add_argument(flag, **ARGUMENT_SPECS[flag])
     parser.set_defaults(analysis="lopo")
-    parser.add_argument("--c-grid", type=float, nargs="+",
-                        default=[0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
-                        help="Inverse L2 strengths, selected by grouped inner CV.")
-    parser.add_argument("--inner-splits", type=int, default=5)
+    parser.add_argument("--C", "--c", dest="c", type=float, default=0.01,
+                        help="Fixed inverse L2 strength used in every fold (default: 0.01).")
     parser.add_argument("--max-iter", type=int, default=5000)
     args = parser.parse_args()
-    if (args.inner_splits < 2 or args.max_iter < 1 or args.segment_length < 2
-            or args.segment_stride < 1):
-        parser.error("Require inner-splits >= 2, max-iter >= 1, length >= 2, stride >= 1.")
-    if not all(np.isfinite(c) and c > 0 for c in args.c_grid):
-        parser.error("All C values must be finite and positive.")
-    args.c_grid = sorted(set(args.c_grid))
+    if args.max_iter < 1 or args.segment_length < 2 or args.segment_stride < 1:
+        parser.error("Require max-iter >= 1, length >= 2, stride >= 1.")
+    if not np.isfinite(args.c) or args.c <= 0:
+        parser.error("C must be finite and positive.")
     try:
         args.rois, args.roi_label = resolve_rois(args.rois)
     except ValueError as error:
@@ -119,25 +116,6 @@ def macro_group_balanced_accuracy(y, predictions, groups):
     return float(np.mean(scores))
 
 
-def select_c(X, y, participants, groups, args):
-    """Tune only on outer-training data, grouping by participant or run."""
-    n_splits = min(args.inner_splits, len(np.unique(groups)))
-    if n_splits < 2:
-        raise ValueError("Need at least two groups in each outer training fold.")
-    splits = list(GroupKFold(n_splits=n_splits).split(X, y, groups))
-    rows = []
-    for c in args.c_grid:
-        predictions = np.full(len(y), -1, dtype=int)
-        for train, validation in splits:
-            scaler, model = fit_model(X[train], y[train], participants[train], c, args)
-            predictions[validation] = model.predict(scaler.transform(X[validation]))
-        rows.append({"C": c, "inner_group_balanced_accuracy":
-                     macro_group_balanced_accuracy(y, predictions, groups)})
-    # The ascending C grid makes ties favor stronger regularization.
-    best = max(rows, key=lambda row: row["inner_group_balanced_accuracy"])
-    return best["C"], rows
-
-
 def classification_metrics(y, predictions):
     responsive, nonresponsive = y == 0, y == 1
     return {
@@ -164,13 +142,13 @@ def main():
     ).to_numpy()
     folds = get_folds(X, y, participants, metadata, args.analysis)
     output = (Path("plots/LR") / get_segment_dir_name(args) / args.roi_label
-              / args.analysis.upper() / f"SEED={args.seed}")
+              / args.analysis.upper() / f"C={args.c:g}" / f"SEED={args.seed}")
     output.mkdir(parents=True, exist_ok=True)
     settings = vars(args).copy()
     settings.update(features=["mean", "sd", "slope_per_TR"],
                     regularization="L2", solver="lbfgs", threshold=0.5,
                     weighting="equal participants, then available classes",
-                    inner_selection="group-averaged balanced accuracy",
+                    regularization_selection="fixed C; no inner cross-validation",
                     note="Deterministic fits; seeds do not represent independent repetitions.")
     (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     prefix = args.analysis
@@ -182,12 +160,10 @@ def main():
     predictions["fold"] = -1
     predictions["prediction"] = -1
     predictions["probability_nonresponsive"] = np.nan
-    fold_rows, tuning_rows, coefficient_rows, training_sizes = [], [], [], []
+    fold_rows, coefficient_rows, training_sizes = [], [], []
     for fold, (train, test) in enumerate(folds, start=1):
         print(f"Fold {fold}/{len(folds)}: held out {groups[test[0]]}", flush=True)
-        c, tuning = select_c(features[train], y[train], participants[train], groups[train], args)
-        tuning_rows.extend({"fold": fold, **row} for row in tuning)
-        scaler, model = fit_model(features[train], y[train], participants[train], c, args)
+        scaler, model = fit_model(features[train], y[train], participants[train], args.c, args)
         probability = model.predict_proba(scaler.transform(features[test]))[:, 1]
         pred = (probability >= 0.5).astype(int)
         predictions.loc[test, "fold"] = fold
@@ -197,7 +173,7 @@ def main():
         fold_rows.append({
             "fold": fold, "participant": participants[test[0]],
             **({"run": metadata.iloc[test[0]]["run"]} if args.analysis == "loro" else {}),
-            "selected_C": c, "train_accuracy": train_accuracy,
+            "C": args.c, "train_accuracy": train_accuracy,
             "n_responsive": int((y[test] == 0).sum()),
             "n_nonresponsive": int((y[test] == 1).sum()),
             **classification_metrics(y[test], pred),
@@ -209,7 +185,6 @@ def main():
             "intercept": float(model.intercept_[0]),
         } for name, coef, mean, scale in zip(feature_names, model.coef_[0], scaler.mean_, scaler.scale_))
         pd.DataFrame(fold_rows).to_csv(output / f"{prefix}_fold_results.csv", index=False)
-        pd.DataFrame(tuning_rows).to_csv(output / f"{prefix}_inner_cv.csv", index=False)
 
     fold_df = pd.DataFrame(fold_rows)
     if (predictions["fold"] < 0).any():
