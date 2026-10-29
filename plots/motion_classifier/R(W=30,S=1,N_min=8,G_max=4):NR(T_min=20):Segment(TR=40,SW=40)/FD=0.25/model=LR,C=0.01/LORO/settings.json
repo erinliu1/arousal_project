@@ -1,0 +1,32 @@
+{
+  "run_training": true,
+  "analysis": "loro",
+  "segment_length": 40,
+  "segment_stride": 40,
+  "responsive_window_size": 30,
+  "responsive_window_stride": 1,
+  "responsive_min_bp_trs": 8,
+  "responsive_max_bp_gap": 4,
+  "trim_responsive_intervals": false,
+  "nonresponsive_min_gap": 20,
+  "rebuild_segment_arrays": false,
+  "summarize": false,
+  "c": 0.01,
+  "max_iter": 5000,
+  "fd_threshold": 0.25,
+  "plot": false,
+  "model": "LR",
+  "features": [
+    "mean_fd",
+    "max_fd",
+    "median_fd",
+    "sd_fd",
+    "fraction_fd_above_0.25"
+  ],
+  "regularization": "L2",
+  "solver": "lbfgs",
+  "threshold": 0.5,
+  "weighting": "equal participants, then available classes",
+  "regularization_selection": "fixed C; no inner cross-validation",
+  "fd_alignment": "fd[i] assigned to TR i+1; TR 0 assigned zero"
+}

@@ -6,7 +6,7 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --time=1:00:00
-#SBATCH --array=0-24
+#SBATCH --array=0-19
 #SBATCH --mail-user=erinliu@mit.edu
 #SBATCH --mail-type=END,FAIL,TIME_LIMIT
 #SBATCH --output=/orcd/data/ldlewis/001/om/erinliu/Arousal_Project/logs/classifier_trim_%A_%a.out
@@ -24,23 +24,22 @@ conda activate pytorch_env
 cd "$PROJECT_DIR"
 
 SEGMENT_LENGTHS=(10 20 30 50 60)
-SEEDS=(42 123 456 789 2026)
+SEEDS=(123 456 789 2026)
 
 TASK_ID=$SLURM_ARRAY_TASK_ID
 
-SEGMENT_ID=$((TASK_ID / 5))
-SEED_ID=$((TASK_ID % 5))
+SEGMENT_ID=$((TASK_ID / 4))
+SEED_ID=$((TASK_ID % 4))
 
 TR=${SEGMENT_LENGTHS[$SEGMENT_ID]}
 SEED=${SEEDS[$SEED_ID]}
 
 echo "Node: $SLURM_NODELIST"
-echo "Task: $TASK_ID | Analysis: lopo | TR: $TR | SW: $TR | Seed: $SEED | Trim: enabled"
+echo "Task: $TASK_ID | Analysis: loro | TR: $TR | SW: $TR | Seed: $SEED | Trim: disabled"
 
 python -u fmri_classifier_exploration2.py \
     --run-training \
-    --analysis lopo \
+    --analysis loro \
     --segment-length "$TR" \
     --segment-stride "$TR" \
     --seed "$SEED" \
-    --trim-responsive-intervals
