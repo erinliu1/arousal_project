@@ -190,9 +190,9 @@ def visualize_length_and_trim(df, lr_results=None, motion_results=None):
             Line2D([], [], color=COLORS["Motion-only"], linestyle="-", linewidth=3, label="Motion-only"),
             Line2D([], [], color=COLORS["LR"], linestyle="-", linewidth=3, label="LR"),
             Line2D([], [], color=COLORS["GRU"], linestyle="-", marker="o", markersize=6, linewidth=3,
-                   label=f"GRU mean across\n{count_label} seeds"),
+                   label=f"GRU mean\nacross {count_label} seeds"),
             Patch(facecolor=COLORS["GRU"], alpha=0.18, linewidth=0,
-                  label="GRU 95% CI\nacross seeds"),
+                  label=f"GRU 95% CI\nacross {count_label} seeds"),
             Line2D([], [], color="black", linestyle=STYLES["lopo"], linewidth=3, label="LOPO"),
             Line2D([], [], color="black", linestyle=STYLES["loro"], linewidth=3, label="LORO"),
         ]
