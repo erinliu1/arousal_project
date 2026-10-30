@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 import random
 import re
@@ -6,7 +7,7 @@ import re
 import numpy as np
 import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
-from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.model_selection import GroupKFold, LeaveOneGroupOut
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
@@ -21,6 +22,7 @@ RAW_DATA_DIR = Path("raw_data")
 CLASSIFIER_DIR = Path("plots/fMRI_classifier_exploration2")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MOTION_TR_CACHE = {}
+EPOCH_CANDIDATES = (10, 15, 20, 25, 30)
 ROI_GROUPS = {
     "all_rois": all_rois,
     "aan_rois": aan_rois,
@@ -37,6 +39,11 @@ ARGUMENT_SPECS = {
         "choices": ("final", "mean"), "default": "final",
         "help": "Use the final GRU hidden state or the mean over all time steps.",
     },
+    "--inner_cv_folds": {
+        "type": int,
+        "default": 0, # Default to no inner cross-validation folds
+        "help": "Grouped inner folds for epoch selection (>=2); <=0 disables inner CV.",
+    },
     "--summarize": {
         "action": "store_true",
         "help": "Collect all completed classifier runs into CSV files under the results folder.",
@@ -51,7 +58,7 @@ ARGUMENT_SPECS = {
     },
 
     "--seed": {"type": int, "default": 42, "help": "Random seed for reproducible training."},
-    "--epochs": {"type": int, "default": 30, "help": "Training passes through each fold."},
+    "--epochs": {"type": int, "default": 30, "help": "Training passes per fold without inner CV; inner CV selects from 10,15,20,25,30."},
     "--batch-size": {"type": int, "default": 32, "help": "Segments per training batch."},
     "--learning-rate": {"type": float, "default": 1e-3, "help": "Adam optimizer learning rate."},
     "--weight-decay": {"type": float, "default": 1e-3, "help": "Adam optimizer L2 regularization."},
@@ -86,6 +93,8 @@ def parse_args():
     for flag, options in ARGUMENT_SPECS.items():
         parser.add_argument(flag, **options)
     args = parser.parse_args()
+    if args.inner_cv_folds == 1:
+        parser.error("--inner_cv_folds requires at least 2 groups, or <=0 to disable.")
     try:
         args.rois, args.roi_label = resolve_rois(args.rois)
     except ValueError as error:
@@ -583,7 +592,7 @@ def epoch_class_metrics(model, loader):
             metrics[f"{metric}_sum_sq"] = np.square(values).sum()
     return metrics
 
-def run_fold(dataset, train_indices, test_indices, participants, args):
+def run_fold(dataset, train_indices, test_indices, participants, args, evaluation_split="validation"):
     """Train and evaluate one cross-validation fold."""
     set_seed(args.seed)
     train_dataset = Subset(dataset, train_indices)
@@ -608,13 +617,80 @@ def run_fold(dataset, train_indices, test_indices, participants, args):
             optimizer.step()
             total_loss += loss.item() * len(X_batch)
         progress.set_postfix(train_loss=f"{total_loss / len(train_dataset):.4f}")
-        for split, loader in (("train", train_evaluation_loader), ("validation", test_loader)):
+        for split, loader in (("train", train_evaluation_loader), (evaluation_split, test_loader)):
             history.append({"epoch": epoch, "split": split, **epoch_class_metrics(model, loader)})
 
     train_results = evaluate_model(model, train_evaluation_loader)
     test_results = evaluate_model(model, test_loader)
     test_results["train_accuracy"] = train_results["accuracy"]
     return test_results, pd.DataFrame(history)
+
+
+def get_inner_folds(train_indices, participants, metadata, analysis, n_splits):
+    """Split only outer-training segments, keeping participants/runs intact."""
+    if analysis == "lopo":
+        groups = participants[train_indices]
+    else:
+        groups = (metadata["participant"].astype(str) + "::" + metadata["run"].astype(str)).to_numpy()[train_indices]
+    n_groups = len(np.unique(groups))
+    if not 2 <= n_splits <= n_groups:
+        raise ValueError(f"Inner CV requires 2–{n_groups} folds for this outer training set; got {n_splits}.")
+    return [(train_indices[train], train_indices[validation])
+            for train, validation in GroupKFold(n_splits=n_splits).split(train_indices, groups=groups)]
+
+
+def select_epoch(dataset, train_indices, participants, metadata, args, outer_fold_numbers):
+    """Select by pooled segment-level balanced inner-validation accuracy.
+
+    Each inner model trains once through epoch 30, using only outer-training
+    groups. Pool class counts/correct predictions across validation groups at
+    each candidate; do not average fold scores. Exact ties favor earlier epochs.
+    """
+    inner_args = argparse.Namespace(**{**vars(args), "epochs": max(EPOCH_CANDIDATES)})
+    validation_rows = []
+    audit_rows = []
+    for inner_fold, (train, validation) in enumerate(get_inner_folds(
+        train_indices, participants, metadata, args.analysis, args.inner_cv_folds
+    ), start=1):
+        if len(np.unique(dataset.y[train].numpy())) != 2:
+            raise ValueError(f"Inner fold {inner_fold} training data lacks one of the two classes.")
+        print(f"Inner fold {inner_fold}/{args.inner_cv_folds}")
+        _, history = run_fold(dataset, train, validation, participants, inner_args)
+        validation_rows.append(history.loc[
+            history["split"].eq("validation") & history["epoch"].isin(EPOCH_CANDIDATES)
+        ])
+        epoch_history = history.set_index(["split", "epoch"])
+        # These are the 1-based fold numbers in the complete outer CV, not
+        # inner-fold IDs. "test" here refers to inner validation only.
+        test_outer_folds = json.dumps(np.unique(outer_fold_numbers[validation]).tolist())
+        for epoch in EPOCH_CANDIDATES:
+            train_metrics = epoch_history.loc[("train", epoch)]
+            test_metrics = epoch_history.loc[("validation", epoch)]
+            recalls = [
+                test_metrics[f"{prefix}_recall_sum"] / test_metrics[f"{prefix}_recall_count"]
+                if test_metrics[f"{prefix}_recall_count"] else np.nan
+                for prefix in ("r", "nr")
+            ]
+            audit_rows.append({
+                "inner_fold": inner_fold, "test_outer_folds": test_outer_folds, "epoch": epoch,
+                "pooled_train_accuracy": (train_metrics["r_recall_sum"] + train_metrics["nr_recall_sum"])
+                / (train_metrics["r_recall_count"] + train_metrics["nr_recall_count"]),
+                "pooled_test_accuracy": (test_metrics["r_recall_sum"] + test_metrics["nr_recall_sum"])
+                / (test_metrics["r_recall_count"] + test_metrics["nr_recall_count"]),
+                "responsive_recall": recalls[0], "nonresponsive_recall": recalls[1],
+                "balanced_test_accuracy": float(np.nanmean(recalls)),
+            })
+    columns = ["r_recall_count", "r_recall_sum", "nr_recall_count", "nr_recall_sum"]
+    scores = pd.concat(validation_rows).groupby("epoch")[columns].sum().reindex(EPOCH_CANDIDATES)
+    if scores.isna().any().any() or (scores[["r_recall_count", "nr_recall_count"]] <= 0).any().any():
+        raise ValueError("Inner validation must cover both classes at every candidate epoch.")
+    scores["balanced_validation_accuracy"] = 0.5 * (
+        scores["r_recall_sum"] / scores["r_recall_count"]
+        + scores["nr_recall_sum"] / scores["nr_recall_count"]
+    )
+    selected = int(scores["balanced_validation_accuracy"].idxmax())
+    scores["selected"] = scores.index == selected
+    return selected, scores.reset_index(), pd.DataFrame(audit_rows)
 
 
 def get_folds(X, y, participants, metadata, analysis):
@@ -631,10 +707,15 @@ def format_learning_rate(learning_rate):
 
 def output_settings(args):
     """Return the config/ROI/model/analysis results directory and filename prefix."""
+    inner_cv_folds = getattr(args, "inner_cv_folds", 0)
+    epochs = max(EPOCH_CANDIDATES) if inner_cv_folds > 0 else args.epochs
     model_dir = (f"model=GRU,pool={args.pooling},hidden={args.hidden_size},drop={args.dropout},"
-                 f"epochs={args.epochs},batch={args.batch_size},"
+                 f"epochs={epochs},batch={args.batch_size},"
                  f"LR={format_learning_rate(args.learning_rate)},WD={format_learning_rate(args.weight_decay)}")
-    save_dir = get_segment_dir(args) / args.roi_label / model_dir / args.analysis.upper() / f"SEED={args.seed}"
+    analysis_dir = args.analysis.upper()
+    if inner_cv_folds > 0:
+        analysis_dir += f",innerCV={inner_cv_folds}"
+    save_dir = get_segment_dir(args) / args.roi_label / model_dir / analysis_dir / f"SEED={args.seed}"
     return save_dir, args.analysis
 
 
@@ -646,6 +727,9 @@ def run_analysis(args):
     participants = metadata["participant"].astype(str).to_numpy()
     dataset = ArousalDataset(X, y)
     folds = get_folds(X, y, participants, metadata, args.analysis)
+    outer_fold_numbers = np.empty(len(metadata), dtype=int)
+    for fold, (_, test_indices) in enumerate(folds, start=1):
+        outer_fold_numbers[test_indices] = fold
     save_dir, prefix = output_settings(args)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -653,7 +737,24 @@ def run_analysis(args):
     for fold, (train_indices, test_indices) in enumerate(folds, start=1):
         print(f"\n{'=' * 50}\nFold {fold}/{len(folds)}\n{'=' * 50}")
         held_out = metadata.iloc[test_indices[0]]
-        results, fold_history = run_fold(dataset, train_indices, test_indices, participants, args)
+        fold_args = args
+        nested = getattr(args, "inner_cv_folds", 0) > 0
+        if nested:
+            selected_epoch, scores, inner_cv = select_epoch(
+                dataset, train_indices, participants, metadata, args, outer_fold_numbers,
+            )
+            inner_cv.insert(0, "outer_fold", fold)
+            inner_cv.to_csv(save_dir / f"{prefix}_inner_cv.csv",
+                            mode="w" if fold == 1 else "a", header=fold == 1, index=False)
+            scores.insert(0, "fold", fold)
+            scores.to_csv(save_dir / f"{prefix}_inner_cv_scores.csv",
+                          mode="w" if fold == 1 else "a", header=fold == 1, index=False)
+            fold_args = argparse.Namespace(**{**vars(args), "epochs": selected_epoch})
+            print(f"Selected {selected_epoch} epochs; retraining on all outer-training segments.")
+        results, fold_history = run_fold(
+            dataset, train_indices, test_indices, participants, fold_args,
+            evaluation_split="test" if nested else "validation",
+        )
         fold_history.insert(0, "fold", fold)
         history_path = save_dir / f"{prefix}_training_history.csv"
         fold_history.to_csv(history_path, mode="w" if fold == 1 else "a", header=fold == 1, index=False)
@@ -664,6 +765,7 @@ def run_analysis(args):
         responsive, nonresponsive = results["labels"] == 0, results["labels"] == 1
         fold_rows.append({
             "fold": fold, "participant": held_out["participant"],
+            "selected_epoch": fold_args.epochs,
             **({"run": held_out["run"]} if args.analysis == "loro" else {}),
             "train_accuracy": results["train_accuracy"], "test_accuracy": results["accuracy"],
             "n_responsive": int(responsive.sum()), "n_nonresponsive": int(nonresponsive.sum()),
@@ -737,10 +839,11 @@ def parse_folder_name(folder_name):
             "trim": bool(match.group(8))}
 
 def summarize():
-    """Write one summary of all completed experiments per ROI selection.
+    """Write one combined summary per ROI selection, including inner-CV runs.
 
     Each ``results/<ROI>_summary.csv`` row identifies a seeded experiment below
     ``segments``. Incomplete experiments without summary and fold CSVs are skipped.
+    ``innerCV`` identifies nested runs; older fixed-duration runs have value 0.
 
     Returns:
         List of summary files written. This is useful when calling the
@@ -775,6 +878,12 @@ def summarize():
             folds = pd.read_csv(folds_file)
             summary_row["fold_averaged_accuracy"] = folds["test_accuracy"].mean()
             model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
+            summary_row["meanEpoch"] = (
+                folds["selected_epoch"].mean() if "selected_epoch" in folds.columns
+                else int(model_settings["epochs"])
+            )
+            analysis_name, *analysis_options = analysis.split(",")
+            analysis_settings = dict(item.split("=", 1) for item in analysis_options)
             seed = seed_folder.removeprefix("SEED=")
             identifiers = {
                 "model": model_settings["model"],
@@ -783,7 +892,8 @@ def summarize():
                 "drop": float(model_settings.get("drop", 0.2)),
                 "epochs": int(model_settings["epochs"]),
                 "batch": int(model_settings["batch"]), "lr": float(model_settings["LR"]),
-                "wd": float(model_settings.get("WD", 0)), "analysis": analysis.lower(),
+                "wd": float(model_settings.get("WD", 0)), "analysis": analysis_name.lower(),
+                "innerCV": int(analysis_settings.get("innerCV", model_settings.get("inner_cv_folds", 0))),
                 "seed": int(seed) if seed.isdigit() else seed,
             }
             rows_by_roi.setdefault(roi, []).append({**settings, **identifiers, **counts, **summary_row})
@@ -791,7 +901,7 @@ def summarize():
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
         "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
-        "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "seed", "n_segments", "n_responsive",
+        "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "innerCV", "meanEpoch", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy", "fold_averaged_accuracy",
         "responsive_recall", "nonresponsive_recall", "balanced_test_accuracy",
     ]
