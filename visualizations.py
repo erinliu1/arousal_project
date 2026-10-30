@@ -16,8 +16,8 @@ LR_DIR = Path("plots/LR")
 MOTION_DIR = Path("plots/motion_classifier")
 MLP_DIR = Path("plots/MLP")
 MLP_PARAMETERS = {
-    "model": "MLP", "hidden_size": 32, "dropout": 0.2, "epochs": 30,
-    "batch_size": 32, "learning_rate": 1e-3, "weight_decay": 1e-3,
+    "model": "MLP", "hidden_size": 16, "dropout": 0.2, "epochs": 10,
+    "batch_size": 32, "learning_rate": 1e-3, "weight_decay": 1e-2,
     "roi_label": "all_rois", "activation": "ReLU", "hidden_layers": 1,
 }
 LENGTHS = np.arange(10, 61, 10)
@@ -120,7 +120,7 @@ def load_motion_results(root=MOTION_DIR, c=0.01, fd_threshold=0.25):
 
 
 def load_mlp_results(root=MLP_DIR):
-    """Read completed default-architecture MLP runs, one result per seed."""
+    """Read only the 16-unit, WD=0.01, 10-epoch MLP, one result per seed."""
     rows = []
     for path in sorted(Path(root).rglob("*_summary.csv")):
         settings_path = path.parent / "settings.json"
@@ -166,7 +166,7 @@ def visualize_length_and_trim(df, lr_results=None, motion_results=None, mlp_resu
     mlp = load_mlp_results() if mlp_results is None else mlp_results
     seeded_results = {"GRU": gru}
     if mlp.empty:
-        print("No matching MLP results found under plots/MLP; MLP will appear when results are available.")
+        print("No 16-unit, WD=0.01, 10-epoch MLP results found under plots/MLP; old MLP runs are excluded.")
     else:
         seeded_results["MLP"] = select_results(mlp, SEGMENT_PARAMETERS)
     seeded = {}

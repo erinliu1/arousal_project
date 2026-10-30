@@ -3,13 +3,16 @@
     python MLP.py --analysis lopo --segment-length 40 --segment-stride 40 --seed 42
     python MLP.py --analysis loro --segment-length 20 --segment-stride 20 --seed 123
     python MLP.py --summarize
+    python MLP.py --analysis lopo --plot-history
 
-Default: all ROIs, trim disabled, LOPO, 40-TR length/stride, one 32-unit ReLU
-hidden layer, dropout=0.2, Adam LR=1e-3, weight decay=1e-3, 30 epochs.
+Default: all ROIs, trim disabled, LOPO, 40-TR length/stride, one 16-unit ReLU
+hidden layer, dropout=0.2, Adam LR=1e-3, weight decay=1e-2, 10 epochs.
 CPU training; use the same Python environment and data as the GRU and LR.
 Each outer fold uses its final epoch. Test curves are diagnostic only: no
 inner tuning, early stopping, threshold selection, or test-based checkpointing.
 Outputs: plots/MLP/<segment settings>/<ROIs>/<model settings>/<analysis>/SEED=*.
+Training automatically saves a four-panel loss/recall history PNG. Use
+--plot-history with matching run settings to plot an existing CSV without training.
 """
 
 import argparse
@@ -28,7 +31,7 @@ from fmri_classifier_exploration2 import (
     ARGUMENT_SPECS, ParticipantClassBalancedSampler,
     get_folds, get_segment_dir_name, load_segments, resolve_rois, set_seed,
 )
-from scatterplots import visualize_leave_one_out
+from scatterplots import visualize_leave_one_out, plot_training_history
 
 CLASSIFIER_DIR = Path("plots/MLP")
 
@@ -49,8 +52,10 @@ def parse_args():
         if flag == "--hidden-size":
             options["help"] = "Number of units in the single ReLU hidden layer."
         parser.add_argument(flag, **options)
-    parser.set_defaults(analysis="lopo")
+    parser.set_defaults(analysis="lopo", hidden_size=16, weight_decay=1e-2, epochs=10)
     parser.add_argument("--plot", action="store_true", help="Also save a fold-recall plot.")
+    parser.add_argument("--plot-history", action="store_true",
+                        help="Plot the existing training-history CSV for these settings without training.")
     parser.add_argument("--threads", type=int, default=4, help="CPU threads for PyTorch.")
     args = parser.parse_args()
     if min(args.epochs, args.batch_size, args.hidden_size, args.threads, args.segment_stride) < 1 or args.segment_length < 2:
@@ -69,7 +74,7 @@ def parse_args():
 
 
 class SummaryMLP(nn.Module):
-    def __init__(self, n_features, hidden_size=32, dropout=0.2):
+    def __init__(self, n_features, hidden_size=16, dropout=0.2):
         super().__init__()
         self.layers = nn.Sequential(
             nn.Linear(n_features, hidden_size), nn.ReLU(),
@@ -248,6 +253,7 @@ def run_analysis(args):
     pd.DataFrame(scaler_rows).to_csv(output / f"{prefix}_scalers.csv", index=False)
     summary = pd.DataFrame([metrics])
     summary.to_csv(output / f"{prefix}_summary.csv", index=False)
+    plot_training_history(args.analysis, output)
     print(summary.to_string(index=False))
     print(f"Saved results to {output}")
     if args.plot:
@@ -263,7 +269,7 @@ def summarize():
         if not summary_path.exists():
             continue
         parameters = {key: value for key, value in settings.items()
-                      if not isinstance(value, (list, dict)) and key not in {"summarize", "plot", "rebuild_segment_arrays"}}
+                      if not isinstance(value, (list, dict)) and key not in {"summarize", "plot", "plot_history", "rebuild_segment_arrays"}}
         for metrics in pd.read_csv(summary_path).to_dict("records"):
             rows.append({**parameters, **metrics, "result_dir": str(path.parent)})
     if not rows:
@@ -279,6 +285,9 @@ def main():
     args = parse_args()
     if args.summarize:
         summarize()
+    elif args.plot_history:
+        output = plot_training_history(args.analysis, output_settings(args))
+        print(f"Saved {output}")
     else:
         run_analysis(args)
 

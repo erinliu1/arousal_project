@@ -217,7 +217,7 @@ def plot_training_history(analysis, result_dir):
               ("r_recall", "Responsive recall"), ("nr_recall", "Non-responsive recall"))
     summaries = {metric: pool_segment_history(history, metric) for metric, _ in panels}
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
-    colors = {"train": "tab:blue", "validation": "tab:orange"}
+    colors = {"train": "tab:blue", "validation": "tab:orange", "test": "tab:orange"}
     for ax, (metric, title) in zip(axes.flat, panels):
         for split, color in colors.items():
             if split not in summaries[metric].index.get_level_values("split"):

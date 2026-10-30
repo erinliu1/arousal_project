@@ -13,6 +13,7 @@
 
 # From the cluster project directory: mkdir -p logs; sbatch sbatch_MLP.sh
 # 2 analyses x 6 lengths x 5 seeds. Trim disabled; length equals stride.
+# Smaller MLP: 16 hidden units, weight decay 1e-2, fixed 10 epochs.
 set -euo pipefail
 
 PROJECT_DIR=${MLP_PROJECT_DIR:-/orcd/data/ldlewis/001/om/erinliu/Arousal_Project}
@@ -33,7 +34,7 @@ echo "Task $TASK_ID | Analysis: $ANALYSIS | length=stride: $TR | seed: $SEED | t
 # Preview the entire array without loading conda or training:
 # for i in {0..59}; do SLURM_ARRAY_TASK_ID=$i MLP_DRY_RUN=1 bash sbatch_MLP.sh; done
 if [[ ${MLP_DRY_RUN:-0} == 1 ]]; then
-    printf 'python -u MLP.py --analysis %s --segment-length %s --segment-stride %s --seed %s\n' "$ANALYSIS" "$TR" "$TR" "$SEED"
+    printf 'python -u MLP.py --analysis %s --segment-length %s --segment-stride %s --seed %s --hidden-size 16 --epochs 10 --weight-decay 1e-2\n' "$ANALYSIS" "$TR" "$TR" "$SEED"
     exit 0
 fi
 
@@ -51,10 +52,10 @@ python -u MLP.py \
     --segment-stride "$TR" \
     --seed "$SEED" \
     --responsive-max-bp-gap 4 \
-    --hidden-size 32 \
+    --hidden-size 16 \
     --dropout 0.2 \
-    --epochs 30 \
+    --epochs 10 \
     --batch-size 32 \
     --learning-rate 1e-3 \
-    --weight-decay 1e-3 \
+    --weight-decay 1e-2 \
     --threads "$OMP_NUM_THREADS"
