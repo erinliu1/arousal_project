@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t
 
-CLASSIFIER_DIR = Path("plots/fMRI_classifier_exploration2")
+CLASSIFIER_DIR = Path("plots/GRU")
 RESULTS_DIR = CLASSIFIER_DIR / "results"
 LR_DIR = Path("plots/LR")
 MOTION_DIR = Path("plots/motion_classifier")
@@ -30,7 +30,7 @@ MLP_PARAMETERS = {
 }
 LENGTHS = np.arange(10, 61, 10)
 METRICS = {
-    "balanced_test_accuracy": "Balanced Test Accuracy",
+    "balanced_test_accuracy": "Segment-Pooled Balanced Accuracy",
     "responsive_recall": "Responsive Recall",
     "nonresponsive_recall": "Nonresponsive Recall",
 }

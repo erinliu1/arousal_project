@@ -1,0 +1,2 @@
+held_out_participant,configuration,C,seed,inner_folds,n_segments,segment_pooled_balanced_accuracy
+AAN_20,C0.001,0.001,,19,2464,0.5627836113655964

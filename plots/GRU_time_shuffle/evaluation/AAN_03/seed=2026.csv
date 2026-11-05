@@ -1,0 +1,7 @@
+segment_index,fold,participant,run,label,segment_start_TR,segment_end_TR_exclusive,label_binary,prediction,probability_nonresponsive,train_accuracy,n_train_segments
+115,3,AAN_03,run01,responsive,48,88,0,1,0.5852766,0.9319286871961102,2468
+116,3,AAN_03,run01,non-responsive,626,666,1,1,0.99509346,0.9319286871961102,2468
+117,3,AAN_03,run01,non-responsive,666,706,1,1,0.98165166,0.9319286871961102,2468
+118,3,AAN_03,run01,non-responsive,1309,1349,1,1,0.9722044,0.9319286871961102,2468
+119,3,AAN_03,run01,non-responsive,1349,1389,1,1,0.8523274,0.9319286871961102,2468
+120,3,AAN_03,run01,non-responsive,1418,1458,1,1,0.69680613,0.9319286871961102,2468

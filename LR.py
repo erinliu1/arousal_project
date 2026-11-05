@@ -7,7 +7,7 @@ Run from the project directory in the GRU training environment:
     python LR.py --C 0.01
 
 Uses a fixed L2 regularization C (default 0.01) in every outer fold.
-Outputs: plots/LR/<segment configuration>/<ROI selection>/<analysis>/C=*/SEED=*.
+Outputs: plots/LR/segments/<segment configuration>/<ROI selection>/<analysis>/C=*.
 Missing segment caches are built by the existing GRU data loader, requiring the
 original raw_data/<participant>/<run>/z_scored/<ROI>.npy files.
 No GPU training is needed, but the shared loader imports the GRU dependencies.
@@ -25,7 +25,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.preprocessing import StandardScaler
 
-from fmri_classifier_exploration2 import (
+from GRU import (
     ARGUMENT_SPECS, get_folds, get_segment_dir_name, load_segments, resolve_rois,
 )
 
@@ -35,7 +35,7 @@ def parse_args():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     shared = (
-        "--rois", "--analysis", "--seed", "--segment-length", "--segment-stride",
+        "--rois", "--analysis", "--segment-length", "--segment-stride",
         "--responsive-window-size", "--responsive-window-stride",
         "--responsive-min-bp-trs", "--responsive-max-bp-gap",
         "--trim-responsive-intervals", "--nonresponsive-min-gap",
@@ -95,8 +95,7 @@ def fit_model(X, y, participants, c, args):
         raise ValueError("A training fold has only one class; cannot fit binary LR.")
     weights = participant_class_weights(participants, y)
     scaler = StandardScaler().fit(X, sample_weight=weights)
-    model = LogisticRegression(C=c, solver="lbfgs", max_iter=args.max_iter,
-                               random_state=args.seed)
+    model = LogisticRegression(C=c, solver="lbfgs", max_iter=args.max_iter)
     # Do not silently report results from a fit that failed to converge.
     with warnings.catch_warnings():
         warnings.simplefilter("error", ConvergenceWarning)
@@ -141,15 +140,15 @@ def main():
         metadata["participant"].astype(str) + "::" + metadata["run"].astype(str)
     ).to_numpy()
     folds = get_folds(X, y, participants, metadata, args.analysis)
-    output = (Path("plots/LR") / get_segment_dir_name(args) / args.roi_label
-              / args.analysis.upper() / f"C={args.c:g}" / f"SEED={args.seed}")
+    output = (Path("plots/LR/segments") / get_segment_dir_name(args) / args.roi_label
+              / args.analysis.upper() / f"C={args.c:g}")
     output.mkdir(parents=True, exist_ok=True)
     settings = vars(args).copy()
     settings.update(features=["mean", "sd", "slope_per_TR"],
                     regularization="L2", solver="lbfgs", threshold=0.5,
                     weighting="equal participants, then available classes",
                     regularization_selection="fixed C; no inner cross-validation",
-                    note="Deterministic fits; seeds do not represent independent repetitions.")
+                    note="Deterministic fit; no seed parameter.")
     (output / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
     prefix = args.analysis
     pd.DataFrame(features, columns=feature_names).to_csv(output / "features.csv", index=False)

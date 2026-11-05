@@ -105,6 +105,86 @@ def scatter_segement_counts(segments, raw_data_dir, output_dir):
     return output_path
 
 
+def plot_segment_counts_by_participant(segments, output_dir):
+    """Save responsive and non-responsive segment counts pooled across runs."""
+    counts = segments.groupby(["participant", "label"]).size().unstack(fill_value=0)
+    for label in ("responsive", "non-responsive"):
+        if label not in counts:
+            counts[label] = 0
+    counts["_participant_num"] = pd.to_numeric(
+        counts.index.to_series().astype(str).str.extract(r"(\d+)$")[0].to_numpy(), errors="coerce")
+    counts = counts.sort_values("_participant_num")
+
+    x = np.arange(len(counts))
+    width = 0.4
+    fig, ax = plt.subplots(figsize=(18, 9))
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color="lightgray", linewidth=1, alpha=0.6)
+    ax.bar(x - width / 2, counts["responsive"], width, color="#9ADF8C", edgecolor="black",
+           linewidth=1, label="Responsive")
+    ax.bar(x + width / 2, counts["non-responsive"], width, color="pink", edgecolor="black",
+           linewidth=1, label="Non-responsive")
+    labels = [int(number) if pd.notna(number) else participant
+              for participant, number in zip(counts.index, counts["_participant_num"])]
+    ax.set_xticks(x, labels, fontsize=18)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.set_xlabel("Participant", fontsize=26, labelpad=12)
+    ax.set_ylabel("Number of motion-free segments", fontsize=24, labelpad=12)
+    ax.set_title("Responsive and Non-responsive Segments per Participant", fontsize=30, fontweight="bold")
+    ax.legend(fontsize=18)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    output_path = Path(output_dir) / "segment_counts_by_participant.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def plot_lopo_recall_by_participant(result_dir):
+    """Save responsive and non-responsive recall bars for each LOPO fold."""
+    result_dir = Path(result_dir)
+    results_path = result_dir / "lopo_fold_results.csv"
+    if not results_path.exists():
+        raise FileNotFoundError(f"LOPO fold results not found: {results_path}")
+    results = pd.read_csv(results_path)
+    required = {"participant", "responsive_recall", "nonresponsive_recall"}
+    if missing := required.difference(results.columns):
+        raise ValueError(f"LOPO fold results are missing columns: {', '.join(sorted(missing))}")
+    results["_participant_num"] = pd.to_numeric(
+        results["participant"].astype(str).str.extract(r"(\d+)$")[0], errors="coerce")
+    results = results.sort_values("_participant_num").reset_index(drop=True)
+
+    x = np.arange(len(results))
+    width = 0.4
+    fig, ax = plt.subplots(figsize=(18, 9))
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color="lightgray", linewidth=1, alpha=0.6)
+    ax.axhline(0.5, color="0.35", linestyle=":", linewidth=2.5, zorder=2, label="Chance recall")
+    ax.bar(x - width / 2, results["responsive_recall"], width, color="#2E7D32",
+           edgecolor="black", linewidth=1, label="Responsive recall", zorder=3)
+    ax.bar(x + width / 2, results["nonresponsive_recall"], width, color="#AD1457",
+           edgecolor="black", linewidth=1, label="Non-responsive recall", zorder=3)
+    labels = [int(number) if pd.notna(number) else participant
+              for participant, number in zip(results["participant"], results["_participant_num"])]
+    ax.set_xticks(x, labels, fontsize=18)
+    ax.tick_params(axis="y", labelsize=18)
+    ax.set_xlabel("Participant", fontsize=26, labelpad=12)
+    ax.set_ylabel("Recall", fontsize=24, labelpad=12)
+    ax.set_ylim(0, 1.05)
+    ax.set_title("LOPO Responsive and Non-responsive Recall per Participant",
+                 fontsize=30, fontweight="bold")
+    ax.legend(fontsize=18)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    output_path = result_dir / "lopo_recall_by_participant.png"
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
 def visualize_leave_one_out(analysis, result_dir):
     """Save fold-level responsive and non-responsive recall for LORO or LOPO."""
     analysis = analysis.strip().lower()

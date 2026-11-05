@@ -1,0 +1,2 @@
+n_bootstrap,bootstrap_seed,n_participants,n_model_seeds,bootstrap_mean_spba,ci_2.5,ci_97.5,bootstrap_mean_responsive_recall,responsive_recall_ci_2.5,responsive_recall_ci_97.5,bootstrap_mean_nonresponsive_recall,nonresponsive_recall_ci_2.5,nonresponsive_recall_ci_97.5
+10000,0,20,10,0.6741523451858278,0.6090527255948252,0.7439083409180438,0.6801488636550306,0.5590472409561894,0.8111249951100936,0.6681558267166249,0.6295711352119386,0.7131634778098395

@@ -1,0 +1,2 @@
+held_out_participant,configuration,hidden_size,weight_decay,seed,inner_folds,n_segments,segment_pooled_balanced_accuracy
+AAN_18,H64_WD0.001,64,0.001,1024,19,2354,0.7676733323602394

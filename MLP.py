@@ -10,7 +10,7 @@ hidden layer, dropout=0.2, Adam LR=1e-3, weight decay=1e-2, 10 epochs.
 CPU training; use the same Python environment and data as the GRU and LR.
 Each outer fold uses its final epoch. Test curves are diagnostic only: no
 inner tuning, early stopping, threshold selection, or test-based checkpointing.
-Outputs: plots/MLP/<segment settings>/<ROIs>/<model settings>/<analysis>/SEED=*.
+Outputs: plots/MLP/segments/<segment settings>/<ROIs>/<model settings>/<analysis>/SEED=*.
 Training automatically saves a four-panel loss/recall history PNG. Use
 --plot-history with matching run settings to plot an existing CSV without training.
 """
@@ -27,13 +27,14 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from LR import extract_features, macro_group_balanced_accuracy, participant_class_weights
-from fmri_classifier_exploration2 import (
+from GRU import (
     ARGUMENT_SPECS, ParticipantClassBalancedSampler,
     get_folds, get_segment_dir_name, load_segments, resolve_rois, set_seed,
 )
 from scatterplots import visualize_leave_one_out, plot_training_history
 
 CLASSIFIER_DIR = Path("plots/MLP")
+SEGMENT_DIR = CLASSIFIER_DIR / "segments"
 
 
 def parse_args():
@@ -169,7 +170,7 @@ def output_settings(args):
         f"model=MLP,hidden={args.hidden_size},drop={args.dropout:g},epochs={args.epochs},"
         f"batch={args.batch_size},LR={args.learning_rate:g},WD={args.weight_decay:g}"
     )
-    return (CLASSIFIER_DIR / get_segment_dir_name(args) / args.roi_label
+    return (SEGMENT_DIR / get_segment_dir_name(args) / args.roi_label
             / model_dir / args.analysis.upper() / f"SEED={args.seed}")
 
 

@@ -1,0 +1,11 @@
+segment_index,fold,participant,run,label,label_binary,segment_start_TR,segment_end_TR_exclusive,prediction,probability_nonresponsive
+2332,19,AAN_20,run01,responsive,0,41,81,0,0.0036838325
+2333,19,AAN_20,run01,responsive,0,81,121,0,0.0027422938
+2334,19,AAN_20,run01,responsive,0,206,246,0,0.008359197
+2335,19,AAN_20,run01,responsive,0,925,965,0,0.008752605
+2336,19,AAN_20,run01,responsive,0,965,1005,0,0.009031466
+2337,19,AAN_20,run01,responsive,0,1005,1045,0,0.007303078
+2338,19,AAN_20,run01,responsive,0,1275,1315,0,0.003713318
+2339,19,AAN_20,run01,responsive,0,1315,1355,0,0.004989501
+2340,19,AAN_20,run01,non-responsive,1,2462,2502,0,0.04991543
+2341,19,AAN_20,run01,non-responsive,1,3307,3347,1,0.97760403

@@ -27,7 +27,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Subset
 
 from LR import macro_group_balanced_accuracy
-from fmri_classifier_exploration2 import (
+from GRU import (
     ARGUMENT_SPECS, DEVICE, ArousalDataset, ParticipantClassBalancedSampler,
     epoch_class_metrics, evaluate_model, format_learning_rate, get_folds,
     get_segment_dir_name, load_segments, resolve_rois, set_seed,

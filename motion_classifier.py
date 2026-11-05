@@ -1,13 +1,13 @@
 """Motion-only LR baseline using the fMRI classifier's segments and folds.
 
-Examples (run in the same environment as fmri_classifier_exploration2.py):
+Examples (run in the same environment as GRU.py):
     python motion_classifier.py --run-training
     python motion_classifier.py --run-training --analysis loro --segment-length 50 --segment-stride 50
     python motion_classifier.py --summarize
 
 Default: trim disabled, 40-TR segments/stride, LOPO, fixed C=0.01.
 Only segment metadata and fd.npy are loaded; ROI arrays are not needed.
-Results: plots/motion_classifier/<segment settings>/FD=<threshold>/
+Results: plots/motion_classifier/segments/<segment settings>/FD=<threshold>/
          model=LR,C=<C>/<LOPO or LORO>/
 Fits are deterministic, so there is no seed parameter or seed folder.
 """
@@ -23,7 +23,7 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from fmri_classifier_exploration2 import (
+from GRU import (
     ARGUMENT_SPECS, get_folds, get_segment_dir_name, load_segment_metadata,
 )
 from LR import macro_group_balanced_accuracy, participant_class_weights
@@ -31,6 +31,7 @@ from scatterplots import visualize_leave_one_out
 
 RAW_DATA_DIR = Path("raw_data")
 CLASSIFIER_DIR = Path("plots/motion_classifier")
+SEGMENT_DIR = CLASSIFIER_DIR / "segments"
 FD_THRESHOLD = 0.25
 FEATURE_NAMES = (
     "mean_fd", "max_fd", "median_fd", "sd_fd", "fraction_fd_above_0.25",
@@ -132,7 +133,7 @@ def run_fold(X, y, participants, train_indices, test_indices, args):
 
 
 def output_settings(args):
-    return (CLASSIFIER_DIR / get_segment_dir_name(args) / f"FD={args.fd_threshold:g}"
+    return (SEGMENT_DIR / get_segment_dir_name(args) / f"FD={args.fd_threshold:g}"
             / f"model=LR,C={args.c:g}" / args.analysis.upper()), args.analysis
 
 
@@ -226,7 +227,7 @@ def run_analysis(args):
 def summarize():
     """Collect completed parameterized runs; leave legacy results untouched."""
     rows = []
-    for settings_path in sorted(CLASSIFIER_DIR.glob("*/FD=*/model=LR,C=*/*/settings.json")):
+    for settings_path in sorted(SEGMENT_DIR.glob("*/FD=*/model=LR,C=*/*/settings.json")):
         settings = json.loads(settings_path.read_text())
         summary_path = settings_path.parent / f"{settings['analysis']}_summary.csv"
         if not summary_path.exists():
