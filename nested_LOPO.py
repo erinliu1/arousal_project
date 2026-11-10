@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.metrics import balanced_accuracy_score
 import torch
 
@@ -28,6 +29,9 @@ MODELS = (*CONFIGS, "GRU_time_shuffle")
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--paired-contrast", action="store_true")
+    parser.add_argument("--visualize-paired-contrast", action="store_true")
     parser.add_argument("--model", choices=MODELS, default="GRU")
     parser.add_argument("--held-out-participant")
     parser.add_argument("--run", choices=["inner_lopo", "eval"], default="inner_lopo")
@@ -35,6 +39,8 @@ def parse_args():
     parser.add_argument("--seed", type=int)
     parser.add_argument("--summarize", action="store_true")
     args = parser.parse_args()
+    if args.visualize or args.paired_contrast or args.visualize_paired_contrast:
+        return args
     if args.model == "GRU_time_shuffle":
         if args.run != "eval" or args.summarize:
             parser.error("GRU_time_shuffle supports only --run eval, which summarizes automatically.")
@@ -293,10 +299,153 @@ def summarize_eval(model):
         output / "summary.csv", index=False)
     print(f"Saved evaluation summaries to {output}.")
 
+def visualize_nested_lopo():
+    output_dir = Path("plots") / "GRU" / "nested_LOPO"
+
+    models = ("GRU", "GRU_time_shuffle", "LR", "MLP", "motion_classifier")
+    labels = ("GRU", "GRU (time\nshuffled)", "LR", "MLP", "Motion")
+    metrics = (
+        ("segment_weighted_balanced_accuracy", "Balanced Accuracy", "ci_2.5", "ci_97.5"),
+        ("responsive_recall", "Responsive Recall", "responsive_recall_ci_2.5", "responsive_recall_ci_97.5"),
+        ("nonresponsive_recall", "Non-Responsive Recall", "nonresponsive_recall_ci_2.5", "nonresponsive_recall_ci_97.5"),
+    )
+    estimates, intervals = [], []
+    for model in models:
+        folder = (Path("plots/GRU_time_shuffle") if model == "GRU_time_shuffle"
+                  else Path("plots") / model / "nested_LOPO") / "evaluation"
+        summary = pd.read_csv(folder / "summary.csv")
+        estimates.append(summary.set_index("statistic").loc["mean"])
+        intervals.append(pd.read_csv(folder / "bootstrap_ci.csv").iloc[0])
+
+    fig, axes = plt.subplots(1, 3, figsize=(22, 7), sharex=True, layout="constrained")
+    positions = np.arange(len(models))
+    colors = ("tab:blue", "tab:green", "#df65a0")
+    for ax, (metric, title, lower_column, upper_column), color in zip(axes, metrics, colors):
+        points = np.array([row[metric] for row in estimates])
+        lower = np.array([row[lower_column] for row in intervals])
+        upper = np.array([row[upper_column] for row in intervals])
+        # Draw intervals independently so percentile CIs need not contain the estimate.
+        ax.hlines(positions, lower, upper, color=color, linewidth=5)
+        ax.plot(lower, positions, "|", color=color, markersize=20, markeredgewidth=3.5)
+        ax.plot(upper, positions, "|", color=color, markersize=20, markeredgewidth=3.5)
+        ax.plot(points, positions, "o", color=color, markersize=16)
+        if metric == "segment_weighted_balanced_accuracy":
+            ax.axvline(0.5, color="0.4", linestyle=":", linewidth=3.5, zorder=0)
+        ax.set_yticks(positions, labels)
+        ax.set_ylim(len(models) - 0.5, -0.5)
+        ax.set_xlim(0, 1)
+        ax.set_xticks(np.linspace(0, 1, 6))
+        ax.set_title(title, fontsize=32, pad=26)
+        ax.tick_params(axis="both", labelsize=24, width=2.5, length=10)
+        ax.grid(axis="both", alpha=0.25, linewidth=2)
+        ax.set_axisbelow(True)
+        ax.spines[["top", "right"]].set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_linewidth(2.5)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / "nested_lopo_metrics.png"
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved nested-LOPO visualization to {output}.")
+
+def save_balanced_accuracy_bootstraps():
+    output_dir = Path("plots") / "GRU" / "nested_LOPO"
+    sample_path = Path("plots/GRU/bootstrap_samples/participant_samples_B=10000,seed=0.csv")
+    samples = pd.read_csv(sample_path, dtype=str).to_numpy()
+    if samples.shape != (10000, 20) or pd.isna(samples).any():
+        raise ValueError(f"Expected 10,000 bootstrap samples of 20 participants in {sample_path}.")
+    participants = sorted(set(samples.ravel()))
+    participant_index = {participant: i for i, participant in enumerate(participants)}
+    counts = np.zeros((len(samples), len(participants)), dtype=int)
+    for row, sample in enumerate(samples):
+        counts[row] = np.bincount([participant_index[p] for p in sample], minlength=len(participants))
+
+    scores = {}
+    point_estimates = {}
+    models = ("GRU", "GRU_time_shuffle", "MLP", "LR", "motion_classifier")
+    for model in models:
+        folder = (Path("plots") / model / "nested_LOPO" / "evaluation")
+        if model == "GRU_time_shuffle" and not folder.exists():
+            folder = Path("plots/GRU_time_shuffle/evaluation")
+        summary = pd.read_csv(folder / "summary.csv").set_index("statistic")
+        point_estimates[model] = float(summary.loc["mean", "segment_weighted_balanced_accuracy"])
+        seeds = SEEDS if model in {"GRU", "GRU_time_shuffle", "MLP"} else (None,)
+        seed_scores = []
+        for seed in seeds:
+            path = folder / (f"seed={seed}.csv" if seed is not None else "result.csv")
+            if seed is None and not path.exists():
+                path = folder / "results.csv"
+            frame = pd.read_csv(path, dtype={"participant": str})
+            if set(frame["participant"]) != set(participants):
+                raise ValueError(f"Participant set does not match the bootstrap samples: {path}")
+            if not frame[["label_binary", "prediction"]].isin([0, 1]).all().all():
+                raise ValueError(f"Expected binary labels and predictions in {path}.")
+            # Sum class totals and correct predictions before applying resampling multiplicities.
+            totals = frame.assign(
+                n0=frame["label_binary"].eq(0), n1=frame["label_binary"].eq(1),
+                correct0=frame["label_binary"].eq(0) & frame["prediction"].eq(0),
+                correct1=frame["label_binary"].eq(1) & frame["prediction"].eq(1),
+            ).groupby("participant")[["n0", "n1", "correct0", "correct1"]].sum().loc[participants].to_numpy()
+            denominators = counts @ totals[:, :2]
+            correct = counts @ totals[:, 2:]
+            if (denominators == 0).any():
+                raise ValueError(f"A bootstrap sample lacks one of the two classes: {path}")
+            seed_scores.append((correct / denominators).mean(axis=1))
+        scores[model] = np.asarray(seed_scores)
+
+    rows = []
+    for model in models[1:]:
+        # Seed rows share the explicit SEEDS order; deterministic models broadcast.
+        differences = (scores["GRU"] - scores[model]).mean(axis=0)
+        lower, upper = np.percentile(differences, [2.5, 97.5])
+        rows.append({"comparison_model": model,
+                     "point_estimate": point_estimates["GRU"] - point_estimates[model],
+                     "ci_2.5": lower, "ci_97.5": upper})
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / "bootstrap_GRU_paired_BA_difference.csv"
+    pd.DataFrame(rows).to_csv(output, index=False)
+    print(f"Saved paired balanced-accuracy bootstrap intervals to {output}.")
+
+def visualize_balanced_accuracy_paired_contrast():
+    output_dir = Path("plots") / "GRU" / "nested_LOPO"
+    results = pd.read_csv(output_dir / "bootstrap_GRU_paired_BA_difference.csv")
+    
+    models = ("GRU_time_shuffle", "LR", "MLP", "motion_classifier")
+    labels = ("GRU (time\nshuffled)", "LR", "MLP", "Motion")
+    results = results.set_index("comparison_model").loc[list(models)]
+    positions = np.arange(len(models))
+    color = "#6baed6"
+    fig, ax = plt.subplots(figsize=(13, 7), layout="constrained")
+    ax.hlines(positions, results["ci_2.5"], results["ci_97.5"], color=color, linewidth=5)
+    ax.plot(results["ci_2.5"], positions, "|", color=color, markersize=20, markeredgewidth=3.5)
+    ax.plot(results["ci_97.5"], positions, "|", color=color, markersize=20, markeredgewidth=3.5)
+    ax.plot(results["point_estimate"], positions, "o", color=color, markersize=16)
+    ax.axvline(0, color="0.4", linewidth=3.5, zorder=0)
+    ax.set_yticks(positions, labels)
+    ax.set_ylim(len(models) - 0.5, -0.5)
+    ax.margins(x=0.15)
+    ax.set_title("Balanced Accuracy Difference\nGRU − Other Models", fontsize=32, pad=26)
+    ax.set_xlabel("Balanced Accuracy Difference", fontsize=24, labelpad=18)
+    ax.tick_params(axis="both", labelsize=24, width=2.5, length=10)
+    ax.grid(axis="both", alpha=0.25, linewidth=2)
+    ax.set_axisbelow(True)
+    ax.spines[["top", "right"]].set_visible(False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(2.5)
+    output = output_dir / "balanced_accuracy_paired_contrast.png"
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved paired balanced-accuracy visualization to {output}.")
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.summarize:
+    if args.visualize:
+        visualize_nested_lopo()
+    elif args.visualize_paired_contrast:
+        visualize_balanced_accuracy_paired_contrast()
+    elif args.paired_contrast:
+        save_balanced_accuracy_bootstraps()
+    elif args.summarize:
         summarize_nested_lopo(args.model)
     elif args.run == "inner_lopo":
         run_nested_lopo(args.model, args.held_out_participant, args.configuration, args.seed)
