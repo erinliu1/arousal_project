@@ -874,12 +874,13 @@ def participant_summary_metrics(predictions):
 def summarize_bootstraps(segments_dir, specific, config_columns):
     """Return one row per specific configuration with an available bootstrap CI."""
     bootstrap_rows = []
-    for bootstrap_file in segments_dir.glob("*/all_rois/*/*/bootstrap_ci.csv"):
-        segment_folder, _, model_folder, analysis_folder, _ = bootstrap_file.relative_to(segments_dir).parts
+    for bootstrap_file in segments_dir.glob("*/*/*/*/bootstrap_ci.csv"):
+        segment_folder, roi, model_folder, analysis_folder, _ = bootstrap_file.relative_to(segments_dir).parts
         model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
         analysis_name, *analysis_options = analysis_folder.split(",")
         analysis_settings = dict(item.split("=", 1) for item in analysis_options)
         identifiers = {
+            "roi": roi,
             "model": model_settings["model"], "pool": model_settings.get("pool", "final"),
             "hidden": int(model_settings.get("hidden", 32)), "drop": float(model_settings.get("drop", 0.2)),
             "epochs": int(model_settings["epochs"]), "batch": int(model_settings["batch"]),
@@ -913,7 +914,7 @@ def summarize_bootstraps(segments_dir, specific, config_columns):
     return result
 
 def summarize():
-    """Write the complete all-ROI summary and the requested LOPO sweep subset."""
+    """Write separate summaries for each ROI selection and its LOPO sweep subset."""
     segments_dir = CLASSIFIER_DIR / "segments"
     rows = []
 
@@ -939,8 +940,6 @@ def summarize():
                 continue
 
             roi, model_folder, analysis, seed_folder = result_dir.relative_to(segment_dir).parts
-            if roi != "all_rois":
-                continue
             summary_row = pd.read_csv(summary_file).iloc[0].to_dict()
             folds = pd.read_csv(folds_file)
             model_settings = dict(item.split("=", 1) for item in model_folder.split(","))
@@ -952,6 +951,7 @@ def summarize():
             analysis_settings = dict(item.split("=", 1) for item in analysis_options)
             seed = seed_folder.removeprefix("SEED=")
             identifiers = {
+                "roi": roi,
                 "model": model_settings["model"],
                 "pool": model_settings.get("pool", "final"),
                 "hidden": int(model_settings.get("hidden", 32)),
@@ -976,7 +976,7 @@ def summarize():
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
         "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
-        "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "balance", "innerCV", "meanEpoch", "seed", "n_segments", "n_responsive",
+        "roi", "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "balance", "innerCV", "meanEpoch", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy",
         "participant_averaged_accuracy", "responsive_recall", "nonresponsive_recall",
         "segmented_weighted_balanced_accuracy",
@@ -984,10 +984,6 @@ def summarize():
     summary = pd.DataFrame(rows).reindex(columns=columns).sort_values(columns).reset_index(drop=True)
     output_dir = CLASSIFIER_DIR / "results"
     output_dir.mkdir(parents=True, exist_ok=True)
-    summary_file = output_dir / "all_rois_summary.csv"
-    specific_file = output_dir / "all_rois_summary_specific.csv"
-    bootstrap_file = output_dir / "all_rois_summary_specific_bootstrap.csv"
-    summary.to_csv(summary_file, index=False)
     specific = summary.loc[
         summary["analysis"].eq("lopo") & summary["segment_length"].eq(40)
         & summary["segment_stride"].eq(40) & summary["trim"].eq(False)
@@ -997,13 +993,17 @@ def summarize():
         & summary["hidden"].isin([16, 32, 64]) & summary["wd"].isin([.001, .003, .01])
         & summary["drop"].eq(.2)
     ]
-    specific.to_csv(specific_file, index=False)
     config_columns = columns[:columns.index("meanEpoch")]
-    summarize_bootstraps(segments_dir, specific, config_columns).to_csv(bootstrap_file, index=False)
-    print(f"Saved {summary_file}")
-    print(f"Saved {specific_file}")
-    print(f"Saved {bootstrap_file}")
-    return [summary_file, specific_file, bootstrap_file]
+    bootstraps = summarize_bootstraps(segments_dir, specific, config_columns)
+    output_files = []
+    for roi in sorted(set(summary["roi"]) | {"all_rois"}):
+        for suffix, frame in (("summary", summary), ("summary_specific", specific),
+                              ("summary_specific_bootstrap", bootstraps)):
+            output_file = output_dir / f"{roi}_{suffix}.csv"
+            frame.loc[frame["roi"].eq(roi)].to_csv(output_file, index=False)
+            print(f"Saved {output_file}")
+            output_files.append(output_file)
+    return output_files
 
 def visualize_gru():
     """Save the segment-length comparison for completed GRU configurations."""
