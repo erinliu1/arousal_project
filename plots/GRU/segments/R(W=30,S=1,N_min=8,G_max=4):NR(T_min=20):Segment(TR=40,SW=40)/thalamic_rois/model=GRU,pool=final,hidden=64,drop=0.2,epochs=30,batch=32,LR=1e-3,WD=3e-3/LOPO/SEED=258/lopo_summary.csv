@@ -1,0 +1,2 @@
+pooled_train_accuracy,pooled_test_accuracy,fold_averaged_accuracy,responsive_recall,nonresponsive_recall,balanced_test_accuracy
+0.8501467897715185,0.7122069523039612,0.732404015971565,0.7623485554520038,0.6738044254104212,0.7180764904312125
