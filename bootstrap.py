@@ -111,7 +111,7 @@ def bootstrap_metrics(predictions, participants, samples):
             "spba": recalls.mean(axis=1)}
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     specs = {
         "rois": (str, "all_rois"), "W": (int, 30), "S": (int, 1), "N_min": (int, 8),
@@ -129,14 +129,14 @@ def parse_args():
                         help="Folder containing prediction CSVs; overrides the model configuration path")
     parser.add_argument("--n-bootstrap", type=int, default=B)
     parser.add_argument("--bootstrap-seed", type=int, default=0)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.n_bootstrap < 1:
         parser.error("--n-bootstrap must be at least 1")
     return args
 
 
-def main():
-    args = parse_args()
+def main(argv=None):
+    args = parse_args(argv)
     config_names = ["rois", "W", "S", "N_min", "G_max", "T_min", "TR", "SW", "trim", "model",
                     "pool", "hidden", "drop", "epochs", "batch", "LR", "WD", "analysis", "balance",
                     "innerCV", "C", "FD"]

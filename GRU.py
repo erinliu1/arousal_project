@@ -51,6 +51,14 @@ ARGUMENT_SPECS = {
         "default": "participant_then_class",
         "help": "Sampling order used to balance training segments.",
     },
+    "--bootstrap": {
+        "action": "store_true",
+        "help": "Run missing bootstraps for all summary_specific configurations and refresh summaries.",
+    },
+    "--n-bootstrap": {"type": int, "default": 10000,
+                      "help": "Number of participant bootstrap replicates."},
+    "--bootstrap-seed": {"type": int, "default": 0,
+                         "help": "Random seed for participant bootstrap samples."},
     "--summarize": {
         "action": "store_true",
         "help": "Collect completed runs and write canonical filtered LOPO/LORO CSVs.",
@@ -104,6 +112,8 @@ def parse_args():
     for flag, options in ARGUMENT_SPECS.items():
         parser.add_argument(flag, **options)
     args = parser.parse_args()
+    if args.n_bootstrap < 1:
+        parser.error("--n-bootstrap must be at least 1")
     if args.inner_cv_folds == 1:
         parser.error("--inner_cv_folds requires at least 2 groups, or <=0 to disable.")
     try:
@@ -839,7 +849,9 @@ def run_analysis(args):
 
 def main():
     args = parse_args()
-    if args.summarize:
+    if args.bootstrap:
+        bootstrap_specific(args.n_bootstrap, args.bootstrap_seed)
+    elif args.summarize:
         summarize()
     elif args.visualize:
         visualize_gru()
@@ -872,7 +884,7 @@ def participant_summary_metrics(predictions):
     return {"participant_averaged_accuracy": accuracy.mean()}
 
 def summarize_bootstraps(segments_dir, specific, config_columns):
-    """Return one row per specific configuration with an available bootstrap CI."""
+    """Summarize every specific configuration across seeds, adding available CIs."""
     bootstrap_rows = []
     for bootstrap_file in segments_dir.glob("*/*/*/*/bootstrap_ci.csv"):
         segment_folder, roi, model_folder, analysis_folder, _ = bootstrap_file.relative_to(segments_dir).parts
@@ -893,24 +905,40 @@ def summarize_bootstraps(segments_dir, specific, config_columns):
             raise ValueError(f"Expected one row in {bootstrap_file}, found {len(bootstrap)}")
         bootstrap_rows.append({**parse_folder_name(segment_folder), **identifiers, **bootstrap.iloc[0].to_dict()})
 
-    bootstrap_columns = ["n_bootstrap", "bootstrap_seed", "n_participants", "n_model_seeds",
-                         "bootstrap_mean_spba", "ci_2.5", "ci_97.5",
-                         "bootstrap_mean_responsive_recall", "responsive_recall_ci_2.5",
-                         "responsive_recall_ci_97.5", "bootstrap_mean_nonresponsive_recall",
-                         "nonresponsive_recall_ci_2.5", "nonresponsive_recall_ci_97.5"]
     metadata_columns = ["meanEpoch", "n_segments", "n_responsive", "n_nonresponsive"]
-    output_columns = config_columns + metadata_columns + bootstrap_columns
-    if not bootstrap_rows:
-        return pd.DataFrame(columns=output_columns)
-
-    config_metadata = specific.groupby(config_columns, as_index=False).agg(
-        meanEpoch=("meanEpoch", "mean"), n_segments=("n_segments", "first"),
-        n_responsive=("n_responsive", "first"), n_nonresponsive=("n_nonresponsive", "first"),
-    )
-    bootstraps = pd.DataFrame(bootstrap_rows)
-    result = config_metadata.merge(bootstraps, on=config_columns, how="inner")[output_columns].sort_values(config_columns)
-    integer_columns = ["n_bootstrap", "bootstrap_seed", "n_participants", "n_model_seeds"]
-    result[integer_columns] = result[integer_columns].astype(int)
+    bootstrap_columns = ["n_bootstrap", "bootstrap_seed", "n_participants", "n_model_seeds"]
+    metrics = {
+        "swba": "segmented_weighted_balanced_accuracy",
+        "responsive_recall": "responsive_recall",
+        "nonresponsive_recall": "nonresponsive_recall",
+    }
+    metric_columns = [f"{metric}_{suffix}" for metric in metrics
+                      for suffix in ("seed_mean", "seed_std", "ci_lower", "ci_upper")]
+    output_columns = config_columns + metadata_columns + bootstrap_columns + metric_columns
+    aggregations = {
+        "meanEpoch": ("meanEpoch", "mean"), "n_segments": ("n_segments", "first"),
+        "n_responsive": ("n_responsive", "first"), "n_nonresponsive": ("n_nonresponsive", "first"),
+        "n_model_seeds": ("seed", "nunique"),
+    }
+    for metric, source in metrics.items():
+        aggregations[f"{metric}_seed_mean"] = (source, "mean")
+        aggregations[f"{metric}_seed_std"] = (source, "std")
+    result = specific.groupby(config_columns, as_index=False).agg(**aggregations)
+    if bootstrap_rows:
+        ci_names = {
+            "ci_2.5": "swba_ci_lower", "ci_97.5": "swba_ci_upper",
+            "responsive_recall_ci_2.5": "responsive_recall_ci_lower",
+            "responsive_recall_ci_97.5": "responsive_recall_ci_upper",
+            "nonresponsive_recall_ci_2.5": "nonresponsive_recall_ci_lower",
+            "nonresponsive_recall_ci_97.5": "nonresponsive_recall_ci_upper",
+        }
+        bootstraps = pd.DataFrame(bootstrap_rows).rename(columns=ci_names)
+        available_columns = config_columns + bootstrap_columns[:-1] + list(ci_names.values())
+        result = result.merge(bootstraps.reindex(columns=available_columns),
+                              on=config_columns, how="left", validate="one_to_one")
+    result = result.reindex(columns=output_columns).sort_values(config_columns)
+    for column in bootstrap_columns:
+        result[column] = result[column].astype("Int64")
     return result
 
 def summarize():
@@ -1005,15 +1033,61 @@ def summarize():
             output_files.append(output_file)
     return output_files
 
+def bootstrap_specific(n_bootstrap=10000, bootstrap_seed=0):
+    """Bootstrap missing configurations across every ROI's refreshed specific summary."""
+    from bootstrap import main as run_bootstrap, return_config_folder
+
+    summary_files = summarize()
+    completed = skipped = 0
+    failures = []
+    for summary_file in summary_files:
+        if not summary_file.name.endswith("_summary_specific.csv"):
+            continue
+        specific = pd.read_csv(summary_file)
+        config_columns = list(specific.columns[:specific.columns.get_loc("meanEpoch")])
+        for config in specific[config_columns].drop_duplicates().to_dict("records"):
+            folder = return_config_folder(
+                rois=config["roi"], W=config["responsive_window_size"],
+                S=config["responsive_window_stride"], N_min=config["responsive_min_bp_trs"],
+                G_max=config["responsive_max_bp_gap"], T_min=config["nonresponsive_min_gap"],
+                TR=config["segment_length"], SW=config["segment_stride"], trim=config["trim"],
+                model=config["model"], pool=config["pool"], hidden=config["hidden"],
+                drop=config["drop"], epochs=config["epochs"], batch=config["batch"],
+                LR=config["lr"], WD=config["wd"], analysis=config["analysis"],
+                balance=config["balance"], innerCV=config["innerCV"],
+            )
+            output = folder / "bootstrap_ci.csv"
+            if output.exists() and output.stat().st_size > 0:
+                print(f"Skipping existing bootstrap: {folder}", flush=True)
+                skipped += 1
+                continue
+            print(f"Bootstrapping: {folder}", flush=True)
+            try:
+                run_bootstrap(["--predictions-folder", str(folder),
+                               "--analysis", config["analysis"],
+                               "--n-bootstrap", str(n_bootstrap),
+                               "--bootstrap-seed", str(bootstrap_seed)])
+                completed += 1
+            except (ValueError, OSError) as error:
+                failures.append((folder, str(error)))
+                print(f"Bootstrap failed: {folder}: {error}", flush=True)
+    summarize()
+    print(f"Bootstraps: {completed} completed, {skipped} skipped, {len(failures)} failed.")
+    if failures:
+        raise RuntimeError("Some bootstraps failed; successful results and summaries were saved.\n"
+                           + "\n".join(f"{folder}: {error}" for folder, error in failures))
+
+
 def visualize_gru():
-    """Save the segment-length comparison for completed GRU configurations."""
+    """Save the four-ROI LOPO comparison with participant bootstrap CIs."""
     from visualizations_GRU import visualize_gru as build_figure
 
+    import matplotlib.pyplot as plt
+    plt.switch_backend("Agg")
     figure, _ = build_figure()
     output = CLASSIFIER_DIR / "results" / "results_GRU.png"
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=250)
-    import matplotlib.pyplot as plt
     plt.close(figure)
     print(f"Saved {output}")
 
