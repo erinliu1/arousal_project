@@ -1,47 +1,40 @@
 #!/bin/bash
-#SBATCH --job-name=GRU_ROI_CPU
+#SBATCH --job-name=GRU_ALL_ROIS_CPU
 #SBATCH --partition=ou_bcs_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=1:00:00
-#SBATCH --array=0-239
+#SBATCH --array=0-24
 #SBATCH --mail-user=erinliu@mit.edu
 #SBATCH --mail-type=END,FAIL,TIME_LIMIT
-#SBATCH --output=logs/GRU_ROI_CPU_%A_%a.out
-#SBATCH --error=logs/GRU_ROI_CPU_%A_%a.err
+#SBATCH --output=logs/GRU_ALL_ROIS_CPU_%A_%a.out
+#SBATCH --error=logs/GRU_ALL_ROIS_CPU_%A_%a.err
 
-# Submit with: mkdir -p logs && sbatch sbatch.sh
-#
-# The 240 array tasks are:
-#   8 remaining hidden-size/weight-decay configurations
-#   x 3 ROI groups
-#   x 10 model seeds
-# Each task runs exactly one configuration/ROI/seed combination on one CPU.
-# Hidden=64 with WD=1e-2 is omitted because it was previously run.
+# Submit from the cluster project directory:
+#   mkdir -p logs && sbatch sbatch_all_rois_remaining.sh
+# 25 independent CPU tasks: 5 configurations x 5 remaining seeds.
 # Completed runs are skipped; incomplete runs are retried.
 set -euo pipefail
 
 PROJECT_DIR=/orcd/data/ldlewis/001/om/erinliu/Arousal_Project
-SEEDS=(42 123 456 789 2026 12 314 258 1024 2048)
-ROI_GROUPS=(aan_rois cortical_rois thalamic_rois)
-CONFIG_HIDDEN=(16 16 16 32 32 32 64 64)
-CONFIG_WD=(1e-2 3e-3 1e-3 1e-2 3e-3 1e-3 3e-3 1e-3)
+SEEDS=(12 258 314 1024 2048)
+ROI_GROUP=all_rois
+CONFIG_HIDDEN=(16 16 32 32 64)
+CONFIG_WD=(1e-3 3e-3 1e-3 3e-3 3e-3)
 DROPOUT=0.2
 
 TASK_ID=${SLURM_ARRAY_TASK_ID:?Submit this file with sbatch}
-if (( TASK_ID < 0 || TASK_ID > 239 )); then
-    echo "SLURM_ARRAY_TASK_ID must be between 0 and 239" >&2
+if (( TASK_ID < 0 || TASK_ID > 24 )); then
+    echo "SLURM_ARRAY_TASK_ID must be between 0 and 24" >&2
     exit 1
 fi
 
-# Seed varies fastest, then ROI group, then hidden-size/weight-decay configuration.
-SEED_INDEX=$((TASK_ID % 10))
-ROI_INDEX=$((TASK_ID / 10 % 3))
-CONFIG_INDEX=$((TASK_ID / 30))
+# Seed varies fastest; each block of five tasks uses one configuration.
+SEED_INDEX=$((TASK_ID % 5))
+CONFIG_INDEX=$((TASK_ID / 5))
 SEED=${SEEDS[$SEED_INDEX]}
-ROI_GROUP=${ROI_GROUPS[$ROI_INDEX]}
 HIDDEN=${CONFIG_HIDDEN[$CONFIG_INDEX]}
 WD=${CONFIG_WD[$CONFIG_INDEX]}
 
