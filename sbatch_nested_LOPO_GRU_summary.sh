@@ -11,11 +11,12 @@
 #SBATCH --output=logs/nLOPO_GRU_summary_%j.out
 #SBATCH --error=logs/nLOPO_GRU_summary_%j.err
 
-# One lightweight job that summarizes all four ROI groups sequentially.
+# One lightweight job that summarizes all three ROI pairs sequentially.
 set -euo pipefail
 
 PROJECT_DIR=/orcd/data/ldlewis/001/om/erinliu/Arousal_Project
-ROI_GROUPS=(all_rois aan_rois cortical_rois thalamic_rois)
+ROI_PAIR_A=(cortical_rois aan_rois aan_rois)
+ROI_PAIR_B=(thalamic_rois cortical_rois thalamic_rois)
 
 source /orcd/data/ldlewis/001/om/erinliu/miniconda3/etc/profile.d/conda.sh
 conda activate pytorch_env
@@ -27,7 +28,9 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-for ROI_GROUP in "${ROI_GROUPS[@]}"; do
-    echo "Summarizing rois=$ROI_GROUP"
-    python -u nested_LOPO_GRU.py --summarize --rois "$ROI_GROUP"
+for PAIR_INDEX in "${!ROI_PAIR_A[@]}"; do
+    ROI_A=${ROI_PAIR_A[$PAIR_INDEX]}
+    ROI_B=${ROI_PAIR_B[$PAIR_INDEX]}
+    echo "Summarizing rois=$ROI_A+$ROI_B"
+    python -u nested_LOPO_GRU.py --summarize --rois "$ROI_A" "$ROI_B"
 done

@@ -9,6 +9,7 @@ import pandas as pd
 
 PROJECT_DIR = Path(__file__).resolve().parent
 B = 10_000
+NESTED_GRU_SEEDS = (42, 123, 456, 789, 2026, 12, 314, 258, 1024, 2048)
 
 
 def format_rate(value):
@@ -43,12 +44,32 @@ def return_config_folder(rois="all_rois", W=30, S=1, N_min=8, G_max=4, T_min=20,
 
 
 def load_predictions(config_folder, analysis):
-    paths = sorted(config_folder.glob(f"SEED=*/{analysis.lower()}_predictions.csv"))
+    nested_outer_dir = (config_folder if config_folder.name == "outer_LOPO"
+                        else config_folder / "outer_LOPO")
+    nested_paths = sorted(
+        nested_outer_dir.glob("seed=*/predictions.csv"),
+        key=lambda path: int(path.parent.name.removeprefix("seed=")),
+    )
+    if nested_paths:
+        found_seeds = [int(path.parent.name.removeprefix("seed=")) for path in nested_paths]
+        if set(found_seeds) != set(NESTED_GRU_SEEDS) or len(found_seeds) != len(NESTED_GRU_SEEDS):
+            missing = sorted(set(NESTED_GRU_SEEDS) - set(found_seeds))
+            extra = sorted(set(found_seeds) - set(NESTED_GRU_SEEDS))
+            raise ValueError(
+                "Nested GRU outer LOPO requires exactly the ten model seeds; "
+                f"missing={missing}, extra={extra}")
+        order = {seed: index for index, seed in enumerate(NESTED_GRU_SEEDS)}
+        paths = sorted(
+            nested_paths,
+            key=lambda path: order[int(path.parent.name.removeprefix("seed="))],
+        )
+    else:
+        paths = sorted(config_folder.glob(f"SEED=*/{analysis.lower()}_predictions.csv"))
     direct_path = config_folder / f"{analysis.lower()}_predictions.csv"
-    if direct_path.exists():
+    if not nested_paths and direct_path.exists():
         paths.append(direct_path)
     results_path = config_folder / "results.csv"
-    if results_path.exists():
+    if not nested_paths and results_path.exists():
         paths.append(results_path)
     if not paths:
         paths = sorted(config_folder.glob("seed=*.csv"))
@@ -62,10 +83,26 @@ def load_predictions(config_folder, analysis):
         if missing:
             raise ValueError(f"{path} is missing columns: {', '.join(sorted(missing))}")
         predictions.append(frame)
-    participants = sorted(set.intersection(*(set(frame["participant"].astype(str)) for frame in predictions)))
+    participant_sets = [set(frame["participant"].astype(str)) for frame in predictions]
+    if nested_paths and any(participants != participant_sets[0] for participants in participant_sets[1:]):
+        raise ValueError("Nested GRU outer-LOPO seeds do not contain identical participant sets.")
+    participants = sorted(set.intersection(*participant_sets))
     if not participants:
         raise ValueError("Prediction files have no participants in common.")
     return predictions, participants, paths
+
+
+def bootstrap_output_path(config_folder, prediction_paths):
+    """Place nested-GRU intervals beside its aggregate evaluation summaries."""
+    if prediction_paths and all(
+            path.name == "predictions.csv"
+            and path.parent.name.startswith("seed=")
+            and path.parent.parent.name == "outer_LOPO"
+            for path in prediction_paths):
+        evaluation_dir = prediction_paths[0].parent.parent.parent / "evaluation"
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        return evaluation_dir / "bootstrap_ci.csv"
+    return config_folder / "bootstrap_ci.csv"
 
 
 def load_or_create_samples(participants, n_bootstrap, bootstrap_seed):
@@ -158,7 +195,7 @@ def main(argv=None):
         "nonresponsive_recall_ci_2.5": intervals["nonresponsive_recall"][0],
         "nonresponsive_recall_ci_97.5": intervals["nonresponsive_recall"][1],
     }])
-    output_path = config_folder / "bootstrap_ci.csv"
+    output_path = bootstrap_output_path(config_folder, paths)
     result.to_csv(output_path, index=False)
     print(result.to_string(index=False))
     print(f"Predictions: {len(paths)} seeds\nSamples: {sample_path}\nSaved: {output_path}")

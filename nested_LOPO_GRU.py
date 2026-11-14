@@ -21,6 +21,12 @@ def parse_args():
     parser.add_argument("--run", choices=("inner_lopo", "eval"), default="inner_lopo")
     parser.add_argument("--summarize", action="store_true",
                         help="Summarize completed outer-LOPO seeds for the selected ROI grouping.")
+    parser.add_argument("--bootstrap", action="store_true",
+                        help="Bootstrap the ten completed outer-LOPO seed predictions.")
+    parser.add_argument("--n-bootstrap", type=int, default=10_000,
+                        help="Number of participant bootstrap replicates.")
+    parser.add_argument("--bootstrap-seed", type=int, default=0,
+                        help="Random seed used to sample bootstrap participants.")
     parser.add_argument(
         "--rois", type=str, nargs="+", default=["all_rois"],
         help=("ROI groups (all_rois, aan_rois, cortical_rois, thalamic_rois) "
@@ -39,9 +45,13 @@ def parse_args():
         args.rois, args.roi_label = resolve_rois(args.rois)
     except ValueError as error:
         parser.error(str(error))
-    if args.summarize and any(value is not None for value in (
+    if args.summarize and args.bootstrap:
+        parser.error("Choose either --summarize or --bootstrap, not both.")
+    if args.n_bootstrap < 1:
+        parser.error("--n-bootstrap must be at least 1.")
+    if (args.summarize or args.bootstrap) and any(value is not None for value in (
             args.held_out_participant, args.hidden_size, args.weight_decay, args.seed)):
-        parser.error("--summarize does not accept participant, configuration, or seed filters.")
+        parser.error("--summarize and --bootstrap do not accept training filters.")
     if args.run == "eval" and any(value is not None for value in (
             args.held_out_participant, args.hidden_size, args.weight_decay)):
         parser.error("--run eval accepts only the optional --seed filter.")
@@ -332,9 +342,6 @@ def run_outer_seed(args, best, X, y, metadata, seed):
     folds.to_csv(output_dir / "fold_results.csv", index=False)
     summary.to_csv(output_dir / "summary.csv", index=False)
 
-    evaluation_dir = roi_dir(args) / "evaluation"
-    evaluation_dir.mkdir(parents=True, exist_ok=True)
-    predictions.to_csv(evaluation_dir / f"seed={seed}.csv", index=False)
     print(f"Saved outer LOPO seed results to {output_dir}", flush=True)
 
 
@@ -381,9 +388,22 @@ def summarize_outer(args):
     return seed_output, mean_std_output
 
 
+def bootstrap_outer(args):
+    """Bootstrap participant-clustered metrics across all ten outer model seeds."""
+    from bootstrap import main as run_bootstrap
+
+    run_bootstrap([
+        "--predictions-folder", str(roi_dir(args) / "outer_LOPO"),
+        "--n-bootstrap", str(args.n_bootstrap),
+        "--bootstrap-seed", str(args.bootstrap_seed),
+    ])
+
+
 def main():
     args = parse_args()
-    if args.summarize:
+    if args.bootstrap:
+        bootstrap_outer(args)
+    elif args.summarize:
         summarize_outer(args)
     elif args.run == "inner_lopo":
         run_inner_lopo(args)

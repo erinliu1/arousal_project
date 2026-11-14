@@ -1,0 +1,2 @@
+seed,pooled_train_accuracy,pooled_test_accuracy,participant_averaged_accuracy,responsive_recall,nonresponsive_recall,segment_weighted_balanced_accuracy
+42,0.9233927583712718,0.7271624898949071,0.7837993114687716,0.727865796831314,0.7266238401142041,0.7272448184727591
