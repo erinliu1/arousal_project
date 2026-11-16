@@ -1018,7 +1018,7 @@ def summarize():
         & summary["responsive_window_stride"].eq(1) & summary["responsive_max_bp_gap"].eq(4)
         & summary["model"].eq("GRU") & summary["pool"].eq("final") & summary["innerCV"].eq(0)
         & summary["balance"].eq("participant")
-        & summary["hidden"].isin([16, 32, 64]) & summary["wd"].isin([.001, .003, .01])
+        & summary["hidden"].isin([8, 16, 32, 64]) & summary["wd"].isin([.001, .003, .01])
         & summary["drop"].eq(.2)
     ]
     config_columns = columns[:columns.index("meanEpoch")]

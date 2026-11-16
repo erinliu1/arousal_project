@@ -1,0 +1,28 @@
+{
+  "rois": [
+    "temporalpole"
+  ],
+  "analysis": "lopo",
+  "segment_length": 40,
+  "segment_stride": 40,
+  "responsive_window_size": 30,
+  "responsive_window_stride": 1,
+  "responsive_min_bp_trs": 8,
+  "responsive_max_bp_gap": 4,
+  "trim_responsive_intervals": false,
+  "nonresponsive_min_gap": 20,
+  "rebuild_segment_arrays": false,
+  "c": 1.0,
+  "max_iter": 5000,
+  "features": [
+    "mean"
+  ],
+  "individual_rois": true,
+  "roi_label": "temporalpole",
+  "regularization": "L2",
+  "solver": "lbfgs",
+  "threshold": 0.5,
+  "weighting": "equal participants, then available classes",
+  "regularization_selection": "fixed C; no inner cross-validation",
+  "note": "Deterministic fit; no seed parameter."
+}

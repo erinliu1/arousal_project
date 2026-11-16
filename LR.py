@@ -30,7 +30,7 @@ from GRU import (
 )
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -47,7 +47,11 @@ def parse_args():
     parser.add_argument("--C", "--c", dest="c", type=float, default=0.01,
                         help="Fixed inverse L2 strength used in every fold (default: 0.01).")
     parser.add_argument("--max-iter", type=int, default=5000)
-    args = parser.parse_args()
+    parser.add_argument("--features", choices=("mean", "mean_sd_slope"),
+                        default="mean_sd_slope", help="Features per ROI (default: mean, SD, slope).")
+    parser.add_argument("--individual-rois", action="store_true",
+                        help="Run each selected ROI separately and write plots/LR/results/roi_summary.csv.")
+    args = parser.parse_args(argv)
     if args.max_iter < 1 or args.segment_length < 2 or args.segment_stride < 1:
         parser.error("Require max-iter >= 1, length >= 2, stride >= 1.")
     if not np.isfinite(args.c) or args.c <= 0:
@@ -59,13 +63,15 @@ def parse_args():
     return args
 
 
-def extract_features(X, rois):
+def extract_features(X, rois, feature_set="mean_sd_slope"):
     """Per ROI: temporal mean, population SD, and OLS slope per TR."""
     if X.ndim != 3 or X.shape[1] < 2 or X.shape[2] != len(rois):
         raise ValueError("Expected X shaped (segments, >=2 TRs, selected ROIs).")
     if not np.isfinite(X).all():
         raise ValueError("Segment arrays contain NaN or infinite values.")
     X = np.asarray(X, dtype=np.float64)
+    if feature_set == "mean":
+        return X.mean(axis=1), [f"{roi}__mean" for roi in rois]
     time = np.arange(X.shape[1], dtype=np.float64)
     time -= time.mean()
     slopes = np.einsum("str,t->sr", X, time) / np.dot(time, time)
@@ -125,16 +131,15 @@ def classification_metrics(y, predictions):
     }
 
 
-def main():
-    args = parse_args()
-    X, y, metadata = load_segments(args)
+def run_analysis(args, data=None):
+    X, y, metadata = load_segments(args) if data is None else data
     y = np.asarray(y, dtype=int)
     if not (len(X) == len(y) == len(metadata)) or set(np.unique(y)) != {0, 1}:
         raise ValueError("Expected aligned segment arrays/metadata and binary labels 0/1.")
     expected = metadata["label"].map({"responsive": 0, "non-responsive": 1})
     if not np.array_equal(y, expected.to_numpy()):
         raise ValueError("Cached y does not agree with segment metadata labels.")
-    features, feature_names = extract_features(X, args.rois)
+    features, feature_names = extract_features(X, args.rois, args.features)
     participants = metadata["participant"].astype(str).to_numpy()
     groups = participants if args.analysis == "lopo" else (
         metadata["participant"].astype(str) + "::" + metadata["run"].astype(str)
@@ -142,9 +147,12 @@ def main():
     folds = get_folds(X, y, participants, metadata, args.analysis)
     output = (Path("plots/LR/segments") / get_segment_dir_name(args) / args.roi_label
               / args.analysis.upper() / f"C={args.c:g}")
+    # Preserve existing multi-feature results when fitting a mean-only model.
+    if args.features == "mean":
+        output = output / "features=mean"
     output.mkdir(parents=True, exist_ok=True)
     settings = vars(args).copy()
-    settings.update(features=["mean", "sd", "slope_per_TR"],
+    settings.update(features=["mean"] if args.features == "mean" else ["mean", "sd", "slope_per_TR"],
                     regularization="L2", solver="lbfgs", threshold=0.5,
                     weighting="equal participants, then available classes",
                     regularization_selection="fixed C; no inner cross-validation",
@@ -206,6 +214,28 @@ def main():
     pd.DataFrame([metrics]).to_csv(output / f"{prefix}_summary.csv", index=False)
     print(pd.DataFrame([metrics]).to_string(index=False))
     print(f"Saved results to {output}")
+    return metrics
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if not args.individual_rois:
+        return run_analysis(args)
+    # Load the shared cache once; fit each ROI sequentially with the same folds.
+    X, y, metadata = load_segments(args)
+    rows = []
+    output = Path("plots/LR/results/roi_summary.csv")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    for index, roi in enumerate(args.rois):
+        print(f"ROI {index + 1}/{len(args.rois)}: {roi}", flush=True)
+        roi_args = argparse.Namespace(**{**vars(args), "rois": [roi], "roi_label": roi})
+        metrics = run_analysis(roi_args, (X[:, :, index:index + 1], y, metadata))
+        rows.append({"roi": roi, "C": args.c, "features": args.features,
+                     "analysis": args.analysis, "segment_configuration": get_segment_dir_name(args),
+                     **metrics})
+    pd.DataFrame(rows).to_csv(output, index=False)
+    print(f"Saved combined ROI summary to {output}")
+    return output
 
 
 if __name__ == "__main__":
