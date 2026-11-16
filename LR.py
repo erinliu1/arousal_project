@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
 from GRU import (
@@ -109,16 +109,30 @@ def fit_model(X, y, participants, c, args):
     return scaler, model
 
 
-def macro_group_balanced_accuracy(y, predictions, groups):
-    """Equal group weight; average recalls only over classes present per group."""
-    scores = []
-    for group in np.unique(groups):
-        mask = groups == group
-        scores.append(np.mean([
-            (predictions[mask & (y == label)] == label).mean()
-            for label in np.unique(y[mask])
-        ]))
-    return float(np.mean(scores))
+def roc_auc_metrics(predictions):
+    """Pooled AUC and equally weighted participant AUCs from held-out probabilities.
+
+    Participant AUC is undefined for participants with only one observed class.
+    """
+    rows = []
+    for participant, frame in predictions.groupby("participant", sort=True):
+        y = frame["label_binary"]
+        rows.append({
+            "participant": participant, "n_segments": len(frame),
+            "n_responsive": int((y == 0).sum()),
+            "n_nonresponsive": int((y == 1).sum()),
+            "roc_auc": (float(roc_auc_score(y, frame["probability_nonresponsive"]))
+                        if y.nunique() == 2 else np.nan),
+        })
+    participants = pd.DataFrame(rows)
+    metrics = {
+        "pooled_roc_auc": float(roc_auc_score(
+            predictions["label_binary"], predictions["probability_nonresponsive"])),
+        "participant_mean_roc_auc": participants["roc_auc"].mean(),
+        "n_participants": len(participants),
+        "n_participants_with_auc": int(participants["roc_auc"].notna().sum()),
+    }
+    return metrics, participants
 
 
 def classification_metrics(y, predictions):
@@ -131,7 +145,7 @@ def classification_metrics(y, predictions):
     }
 
 
-def run_analysis(args, data=None):
+def run_analysis(args, data=None, participant_rows=None):
     X, y, metadata = load_segments(args) if data is None else data
     y = np.asarray(y, dtype=int)
     if not (len(X) == len(y) == len(metadata)) or set(np.unique(y)) != {0, 1}:
@@ -206,9 +220,13 @@ def run_analysis(args, data=None):
     metrics.update(
         pooled_train_accuracy=float(np.average(fold_df["train_accuracy"], weights=training_sizes)),
         fold_averaged_accuracy=float(fold_df["test_accuracy"].mean()),
-        group_averaged_balanced_accuracy=macro_group_balanced_accuracy(y, pred, groups),
         n_segments=len(y), n_folds=len(folds), n_features=features.shape[1],
     )
+    auc_metrics, participant_auc = roc_auc_metrics(predictions)
+    metrics.update(auc_metrics)
+    if participant_rows is not None:
+        participant_rows.append(participant_auc.assign(roi=args.roi_label))
+    participant_auc.to_csv(output / f"{prefix}_participant_roc_auc.csv", index=False)
     predictions.to_csv(output / f"{prefix}_predictions.csv", index=False)
     pd.DataFrame(coefficient_rows).to_csv(output / f"{prefix}_coefficients.csv", index=False)
     pd.DataFrame([metrics]).to_csv(output / f"{prefix}_summary.csv", index=False)
@@ -223,17 +241,19 @@ def main(argv=None):
         return run_analysis(args)
     # Load the shared cache once; fit each ROI sequentially with the same folds.
     X, y, metadata = load_segments(args)
-    rows = []
+    rows, participant_rows = [], []
     output = Path("plots/LR/results/roi_summary.csv")
     output.parent.mkdir(parents=True, exist_ok=True)
     for index, roi in enumerate(args.rois):
         print(f"ROI {index + 1}/{len(args.rois)}: {roi}", flush=True)
         roi_args = argparse.Namespace(**{**vars(args), "rois": [roi], "roi_label": roi})
-        metrics = run_analysis(roi_args, (X[:, :, index:index + 1], y, metadata))
+        metrics = run_analysis(roi_args, (X[:, :, index:index + 1], y, metadata), participant_rows)
         rows.append({"roi": roi, "C": args.c, "features": args.features,
                      "analysis": args.analysis, "segment_configuration": get_segment_dir_name(args),
                      **metrics})
     pd.DataFrame(rows).to_csv(output, index=False)
+    pd.concat(participant_rows, ignore_index=True).to_csv(
+        output.parent / "roi_participant_roc_auc.csv", index=False)
     print(f"Saved combined ROI summary to {output}")
     return output
 

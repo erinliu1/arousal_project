@@ -1,2 +1,2 @@
-balanced_test_accuracy,responsive_recall,nonresponsive_recall,pooled_test_accuracy,pooled_train_accuracy,fold_averaged_accuracy,group_averaged_balanced_accuracy,n_segments,n_folds,n_features
-0.4984929550387721,0.9962721342031687,0.0007137758743754461,0.43249797898140663,0.4336467684976386,0.5515482038975864,0.6455582777803859,2474,20,1
+balanced_test_accuracy,responsive_recall,nonresponsive_recall,pooled_test_accuracy,pooled_train_accuracy,fold_averaged_accuracy,n_segments,n_folds,n_features,pooled_roc_auc,participant_mean_roc_auc,n_participants,n_participants_with_auc
+0.4984929550387721,0.9962721342031687,0.0007137758743754461,0.43249797898140663,0.4336467684976386,0.5515482038975864,2474,20,1,0.42431614217776814,0.5687125077549143,20,12
