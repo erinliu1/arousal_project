@@ -957,8 +957,15 @@ def summarize_bootstraps(segments_dir, specific, config_columns):
     return result
 
 def roi_summary_group(roi_label):
-    """Group exclusions by base selection and number of individual ROIs removed."""
+    """Group exclusions and thalamus/cortex additions by individual ROI count."""
     if "__exclude=" not in roi_label:
+        tokens = roi_label.split("+")
+        base = "thalamic_rois+cortical_rois"
+        if "thalamic_rois" in tokens and "cortical_rois" in tokens:
+            additions = [token for token in tokens
+                         if token not in ("thalamic_rois", "cortical_rois")]
+            if additions and all(token in aan_rois for token in additions):
+                return f"{base}_add{len(set(additions))}"
         return roi_label
     base, excluded = roi_label.split("__exclude=", 1)
     selected_rois, _ = resolve_rois(base.split("+"))
@@ -1057,7 +1064,11 @@ def summarize():
         for suffix, frame in (("summary", summary), ("summary_specific", specific),
                               ("summary_specific_bootstrap", bootstraps)):
             output_file = output_dir / f"{group}_{suffix}.csv"
-            frame.loc[frame["roi"].isin(rois)].to_csv(output_file, index=False)
+            selected = frame.loc[frame["roi"].isin(rois)].copy()
+            if group == "thalamic_rois+cortical_rois_add1":
+                selected["roi"] = selected["roi"].str.removeprefix(
+                    "thalamic_rois+cortical_rois+")
+            selected.to_csv(output_file, index=False)
             print(f"Saved {output_file}")
             output_files.append(output_file)
     return output_files
@@ -1073,6 +1084,9 @@ def bootstrap_specific(n_bootstrap=10000, bootstrap_seed=0):
         if not summary_file.name.endswith("_summary_specific.csv"):
             continue
         specific = pd.read_csv(summary_file)
+        if summary_file.name == "thalamic_rois+cortical_rois_add1_summary_specific.csv":
+            # Summary rows display only the added ROI; training folders use the full selection.
+            specific["roi"] = "thalamic_rois+cortical_rois+" + specific["roi"]
         config_columns = list(specific.columns[:specific.columns.get_loc("meanEpoch")])
         for config in specific[config_columns].drop_duplicates().to_dict("records"):
             folder = return_config_folder(
