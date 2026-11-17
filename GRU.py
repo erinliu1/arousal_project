@@ -70,6 +70,8 @@ ARGUMENT_SPECS = {
 
     "--rois": {"type": str, "nargs": "+", "default": ["all_rois"],
                "help": "list ROI groups i.e. all_rois, aan_rois, thalamic_rois, or cortical_rois, and/or individual ROI names in quotes separated by spaces"},
+    "--rois-exclude": {"type": str, "nargs": "+", "default": [],
+                       "help": "ROI groups and/or individual ROI names to remove from --rois after expanding groups; unselected ROIs are ignored."},
 
     "--analysis": {
         "type": str, "choices": ("lopo", "loro"), "default": "lopo",
@@ -117,12 +119,12 @@ def parse_args():
     if args.inner_cv_folds == 1:
         parser.error("--inner_cv_folds requires at least 2 groups, or <=0 to disable.")
     try:
-        args.rois, args.roi_label = resolve_rois(args.rois)
+        args.rois, args.roi_label = resolve_rois(args.rois, args.rois_exclude)
     except ValueError as error:
         parser.error(str(error))
     return args
 
-def resolve_rois(values):
+def resolve_rois(values, exclude=None):
     """
     From argument parser, takes in a list of strings, which could be ROI groups, i.e. "all_rois", "aan_rois", "thalamic_rois", or "cortical_rois", and/or individual ROI names.
 
@@ -149,6 +151,19 @@ def resolve_rois(values):
     rois_from_individual_names_ordered = [roi for roi in all_rois if roi in rois_from_individual_names and roi not in rois_from_groups]
     
     label = "+".join(selected_groups_ordered + rois_from_individual_names_ordered)
+
+    if exclude:
+        excluded_rois, _ = resolve_rois(exclude)
+        removed = all_selected_rois.intersection(excluded_rois)
+        if removed:
+            all_selected_rois_ordered = [roi for roi in all_selected_rois_ordered if roi not in removed]
+            # Name only exclusions that affect this selection, keeping group names compact.
+            effective_exclusions = [value for value in exclude
+                                    if removed.intersection(ROI_GROUPS.get(value, [value]))]
+            _, excluded_label = resolve_rois(effective_exclusions)
+            label += "__exclude=" + excluded_label
+    if not all_selected_rois_ordered:
+        raise ValueError("ROI selection is empty after applying exclusions.")
         
     return all_selected_rois_ordered, label
 
@@ -941,6 +956,17 @@ def summarize_bootstraps(segments_dir, specific, config_columns):
         result[column] = result[column].astype("Int64")
     return result
 
+def roi_summary_group(roi_label):
+    """Group exclusions by base selection and number of individual ROIs removed."""
+    if "__exclude=" not in roi_label:
+        return roi_label
+    base, excluded = roi_label.split("__exclude=", 1)
+    selected_rois, _ = resolve_rois(base.split("+"))
+    excluded_rois, _ = resolve_rois(excluded.split("+"))
+    count = len(set(selected_rois).intersection(excluded_rois))
+    return f"{base}_exclude{count}"
+
+
 def summarize():
     """Write separate summaries for each ROI selection and its LOPO sweep subset."""
     segments_dir = CLASSIFIER_DIR / "segments"
@@ -1024,11 +1050,14 @@ def summarize():
     config_columns = columns[:columns.index("meanEpoch")]
     bootstraps = summarize_bootstraps(segments_dir, specific, config_columns)
     output_files = []
+    roi_groups = {}
     for roi in sorted(set(summary["roi"]) | {"all_rois"}):
+        roi_groups.setdefault(roi_summary_group(roi), []).append(roi)
+    for group, rois in sorted(roi_groups.items()):
         for suffix, frame in (("summary", summary), ("summary_specific", specific),
                               ("summary_specific_bootstrap", bootstraps)):
-            output_file = output_dir / f"{roi}_{suffix}.csv"
-            frame.loc[frame["roi"].eq(roi)].to_csv(output_file, index=False)
+            output_file = output_dir / f"{group}_{suffix}.csv"
+            frame.loc[frame["roi"].isin(rois)].to_csv(output_file, index=False)
             print(f"Saved {output_file}")
             output_files.append(output_file)
     return output_files
