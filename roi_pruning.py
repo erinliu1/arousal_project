@@ -1,7 +1,9 @@
 """Summarize seed-paired balanced-accuracy changes after single-ROI pruning.
 
 Run: python roi_pruning.py
-Uses the canonical 40-TR setup, HD=64, WD=0.003, LR=0.001, 30 epochs.
+     python roi_pruning.py --rois thalamic_rois cortical_rois
+Uses the canonical 40-TR setup, HD=64, LR=0.001, 30 epochs.
+Default WD is 0.003 for all_rois and 0.001 for thalamus + cortex.
 Change = pruned balanced accuracy - baseline balanced accuracy (fraction units).
 Positive changes indicate improvement after pruning. SD uses ddof=1.
 Uses available completed seed pairs for each ROI; n_seed_pairs reports the count.
@@ -14,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from all_rois import all_rois
+from all_rois import all_rois, thalamic_rois, cortical_rois
 
 SEEDS = (42, 123, 456, 789, 2026, 12, 314, 258, 1024, 2048)
 SEGMENT_CONFIG = "R(W=30,S=1,N_min=8,G_max=4):NR(T_min=20):Segment(TR=40,SW=40)"
@@ -36,25 +38,26 @@ def read_balanced_accuracy(folder):
     return value
 
 
-def calculate_averages(segments_root):
+def calculate_averages(segments_root, base_label="all_rois", rois=None, model_config=MODEL_CONFIG):
     """Pair each exclusion with the same seed's unpruned baseline."""
     root = Path(segments_root) / SEGMENT_CONFIG
+    rois = all_rois if rois is None else rois
     baseline = {}
     for seed in SEEDS:
         try:
             baseline[seed] = read_balanced_accuracy(
-                root / "all_rois" / MODEL_CONFIG / "LOPO" / f"SEED={seed}")
+                root / base_label / model_config / "LOPO" / f"SEED={seed}")
         except FileNotFoundError:
             continue
     rows = []
-    for roi in all_rois:
+    for roi in rois:
         paired_seeds, changes = [], []
         for seed in SEEDS:
             if seed not in baseline:
                 continue
             try:
                 pruned = read_balanced_accuracy(
-                    root / f"all_rois__exclude={roi}" / MODEL_CONFIG / "LOPO" / f"SEED={seed}")
+                    root / f"{base_label}__exclude={roi}" / model_config / "LOPO" / f"SEED={seed}")
             except FileNotFoundError:
                 continue
             paired_seeds.append(seed)
@@ -73,12 +76,33 @@ def calculate_averages(segments_root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--segments-root", type=Path, default=Path("plots/GRU/segments"))
-    parser.add_argument("--output", type=Path,
-                        default=Path("plots/GRU/results/all_rois_exclude1_averages.csv"))
+    parser.add_argument("--rois", nargs="+", default=["all_rois"],
+                        choices=["all_rois", "thalamic_rois", "cortical_rois"],
+                        help="Use all_rois, or thalamic_rois cortical_rois together.")
+    parser.add_argument("--weight-decay", type=float, default=None,
+                        help="Override the baseline and pruned models' WD.")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Default: plots/GRU/results/<base selection>_exclude1_averages.csv")
     args = parser.parse_args()
+    selection = set(args.rois)
+    if selection == {"all_rois"}:
+        base_label, rois, default_wd = "all_rois", all_rois, .003
+    elif selection == {"thalamic_rois", "cortical_rois"}:
+        base_label = "thalamic_rois+cortical_rois"
+        rois = [roi for roi in all_rois if roi in thalamic_rois or roi in cortical_rois]
+        default_wd = .001
+    else:
+        parser.error("Use --rois all_rois or --rois thalamic_rois cortical_rois.")
+    wd = default_wd if args.weight_decay is None else args.weight_decay
+    if not np.isfinite(wd) or wd < 0:
+        parser.error("--weight-decay must be finite and nonnegative.")
+    wd_label = f"{wd:.0e}".replace("e-0", "e-").replace("e+0", "e+")
+    model_config = MODEL_CONFIG.rsplit("WD=", 1)[0] + "WD=" + wd_label
+    if args.output is None:
+        args.output = Path("plots/GRU/results") / f"{base_label}_exclude1_averages.csv"
     # Validate available results before writing; missing or incomplete pairs are skipped.
     try:
-        result = calculate_averages(args.segments_root)
+        result = calculate_averages(args.segments_root, base_label, rois, model_config)
     except (FileNotFoundError, ValueError, KeyError) as error:
         parser.exit(1, f"Cannot calculate the pruning summary: {error}\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
