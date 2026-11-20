@@ -971,6 +971,10 @@ def roi_summary_group(roi_label):
     selected_rois, _ = resolve_rois(base.split("+"))
     excluded_rois, _ = resolve_rois(excluded.split("+"))
     count = len(set(selected_rois).intersection(excluded_rois))
+    addition_group = roi_summary_group(base)
+    if addition_group != base:
+        group_base, added_count = addition_group.rsplit("_add", 1)
+        return f"{group_base}_exclude{count}_add{added_count}"
     return f"{base}_exclude{count}"
 
 
