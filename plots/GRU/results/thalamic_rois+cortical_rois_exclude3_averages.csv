@@ -1,2 +1,2 @@
-baseline,excluded_roi,n_seed_pairs,mean_BA,baseline_mean_BA,mean_balanced_accuracy_change,std_balanced_accuracy_change,improved_seeds
-thalamic_rois+cortical_rois,fusiform+AV+CM,10,0.7933822732131821,0.777372905653198,0.01600936755998412,0.023450054819830923,"[42, 456, 789, 2026, 12, 314, 1024, 2048]"
+baseline,excluded_roi,n_seed_pairs,mean_BA,baseline_mean_BA,mean_balanced_accuracy_change,std_balanced_accuracy_change,improved_seeds,BP
+thalamic_rois+cortical_rois,fusiform+AV+CM,10,0.7933822732131821,0.777372905653198,0.01600936755998412,0.023450054819830923,"[42, 456, 789, 2026, 12, 314, 1024, 2048]",preceding

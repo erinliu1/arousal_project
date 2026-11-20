@@ -73,6 +73,9 @@ ARGUMENT_SPECS = {
     "--rois-exclude": {"type": str, "nargs": "+", "default": [],
                        "help": "ROI groups and/or individual ROI names to remove from --rois after expanding groups; unselected ROIs are ignored."},
 
+    "--bp_TR_snap": {"choices": ("nearest", "preceding"), "default": "preceding",
+                     "help": "Button-press TR mapping; nearest uses a separate BP=nearest cache."},
+
     "--analysis": {
         "type": str, "choices": ("lopo", "loro"), "default": "lopo",
         "help": "Cross-validation unit: leave out one participant or one run.",
@@ -203,19 +206,38 @@ def sort_segments(segments):
     segments["_run_num"] = pd.to_numeric(segments["run"].str.extract(r"(\d+)")[0], errors="coerce")
     return segments.sort_values(["_participant_num", "_run_num", "segment_start_TR"]).drop(columns=["_participant_num", "_run_num"]).reset_index(drop=True)
 
-def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5):
+def load_bp_TRs(run_dir, bp_TR_snap="preceding"):
+    """Use saved preceding indices, or round original seconds to the 0.98-s TR grid.
+
+    Exact midpoint ties map to the later TR. Duplicates are removed by callers.
+    """
+    if bp_TR_snap == "preceding":
+        return np.load(Path(run_dir) / "bp_TRs.npy")
+    if bp_TR_snap != "nearest":
+        raise ValueError(f"Unknown button-press snapping mode: {bp_TR_snap}")
+    presses = np.asarray(np.load(Path(run_dir) / "bps.npy"), dtype=float)
+    if not np.isfinite(presses).all():
+        raise ValueError(f"Nonfinite button-press times in {run_dir}")
+    return np.floor(presses / 0.98 + 0.5).astype(int)
+
+
+def bp_cache_suffix(bp_TR_snap):
+    return ",BP=nearest" if bp_TR_snap == "nearest" else ""
+
+
+def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5, bp_TR_snap="preceding"):
     """Classify and save all sliding windows using BP-count and maximum-gap criteria."""
     if min(window_size, stride, min_bp_TRs, max_gap) <= 0:
         raise ValueError("Responsive window criteria must all be positive")
     if min_bp_TRs > window_size or max_gap > window_size:
         raise ValueError("Responsive BP count and gap criteria cannot exceed the window size")
-    output_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={window_size},S={stride},N_min={min_bp_TRs},G_max={max_gap}")
+    output_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={window_size},S={stride},N_min={min_bp_TRs},G_max={max_gap}" + bp_cache_suffix(bp_TR_snap))
     output_dir.mkdir(parents=True, exist_ok=True)
     inventory = get_run_inventory()
     window_rows = []
     for row in inventory.itertuples(index=False):
         n_TRs = len(np.load(row.run_dir / "time_vector.npy"))
-        bp_TRs = np.unique(np.load(row.run_dir / "bp_TRs.npy"))
+        bp_TRs = np.unique(load_bp_TRs(row.run_dir, bp_TR_snap))
         bp_TRs = bp_TRs[(bp_TRs >= 20) & (bp_TRs < n_TRs)]
         for start in range(20, n_TRs - window_size + 1, stride):
             end = start + window_size
@@ -233,7 +255,7 @@ def save_responsive_windows(window_size=30, stride=10, min_bp_TRs=8, max_gap=5):
     windows.to_csv(output_dir / "responsive_windows.csv", index=False)
     return windows, output_dir
 
-def save_responsive_intervals(windows, output_dir, max_gap=5, trim=False):
+def save_responsive_intervals(windows, output_dir, max_gap=5, trim=False, bp_TR_snap="preceding"):
     """Merge qualifying windows, optionally split/trim at long inter-BP gaps.
 
     With trim=False, G_max is applied to individual windows only.
@@ -264,12 +286,12 @@ def save_responsive_intervals(windows, output_dir, max_gap=5, trim=False):
     columns = ["participant", "run", "start_TR", "end_TR", "duration_TRs", "max_within_window_gap"]
     intervals = pd.DataFrame(interval_rows, columns=columns)
     if trim:
-        intervals = split_responsive_intervals(intervals, max_gap)
+        intervals = split_responsive_intervals(intervals, max_gap, bp_TR_snap)
     output_dir.mkdir(parents=True, exist_ok=True)
     intervals.to_csv(output_dir / "responsive_intervals.csv", index=False)
     return intervals
 
-def split_responsive_intervals(intervals, max_gap):
+def split_responsive_intervals(intervals, max_gap, bp_TR_snap="preceding"):
     """Split at BP-index differences > max_gap; retain BPs on both split sides.
 
     Original outer boundaries are preserved. Only empty TRs bordering an
@@ -277,7 +299,7 @@ def split_responsive_intervals(intervals, max_gap):
     """
     rows = []
     for (participant, run), run_intervals in intervals.groupby(["participant", "run"]):
-        bps = np.unique(np.load(RAW_DATA_DIR / str(participant) / str(run) / "bp_TRs.npy"))
+        bps = np.unique(load_bp_TRs(RAW_DATA_DIR / str(participant) / str(run), bp_TR_snap))
         for interval in run_intervals.itertuples(index=False):
             presses = bps[(bps >= interval.start_TR) & (bps < interval.end_TR)]
             cuts = np.flatnonzero(np.diff(presses) > max_gap)
@@ -325,17 +347,17 @@ def save_responsive_segments(intervals, output_dir, segment_length=10, stride=10
     segments.to_csv(segment_dir / "responsive_segments.csv", index=False)
     return segments
 
-def save_nonresponsive_intervals(threshold=20, overwrite=False):
+def save_nonresponsive_intervals(threshold=20, overwrite=False, bp_TR_snap="preceding"):
     """Generate and save bounded, end-of-run, and whole-run non-responsive intervals."""
     if threshold <= 0:
         raise ValueError("The non-responsive minimum gap must be positive")
-    output_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={threshold}"
+    output_dir = CLASSIFIER_DIR / "non_responsiveness" / (f"T_min={threshold}" + bp_cache_suffix(bp_TR_snap))
     output_dir.mkdir(parents=True, exist_ok=True)
     inventory = get_run_inventory()
     bounded, end_intervals, whole_runs = [], [], []
     for row in inventory.itertuples(index=False):
         n_TRs = len(np.load(row.run_dir / "time_vector.npy"))
-        bp_TRs = np.unique(np.load(row.run_dir / "bp_TRs.npy"))
+        bp_TRs = np.unique(load_bp_TRs(row.run_dir, bp_TR_snap))
         bp_TRs = bp_TRs[(bp_TRs >= 0) & (bp_TRs < n_TRs)]
         base = {"participant": row.participant, "run": row.run}
         if len(bp_TRs) == 0 and n_TRs - 20 >= threshold:
@@ -396,7 +418,7 @@ def get_responsive_artifact_paths(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     TR, SW = args.segment_length, args.segment_stride
 
-    responsiveness_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={W},S={S},N_min={N_min},G_max={G_max}")
+    responsiveness_dir = CLASSIFIER_DIR / "responsiveness" / (f"W={W},S={S},N_min={N_min},G_max={G_max}" + bp_cache_suffix(getattr(args, "bp_TR_snap", "preceding")))
 
     segment_dir = responsiveness_dir / (f"TR={TR},SW={SW}" + (",trim" if args.trim_responsive_intervals else ""))
     responsive_segments_path = segment_dir / "responsive_segments.csv"
@@ -409,7 +431,7 @@ def get_nonresponsive_artifact_paths(args):
     T_min = args.nonresponsive_min_gap
     TR, SW = args.segment_length, args.segment_stride
 
-    nonresponsiveness_dir = CLASSIFIER_DIR / "non_responsiveness" / f"T_min={T_min}"
+    nonresponsiveness_dir = CLASSIFIER_DIR / "non_responsiveness" / (f"T_min={T_min}" + bp_cache_suffix(getattr(args, "bp_TR_snap", "preceding")))
 
     nonresponsive_segments_path = nonresponsiveness_dir / f"TR={TR},SW={SW}" / "nonresponsive_segments.csv"
     nonresponsive_intervals_path = nonresponsiveness_dir / "non_responsive_intervals.csv"
@@ -425,10 +447,11 @@ def get_responsive_segments(args):
     if args.rebuild_segment_arrays or not all(path.exists() for path in responsive_artifact_paths):
         W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
         TR, SW = args.segment_length, args.segment_stride
-        responsive_windows, responsive_dir = save_responsive_windows(W, S, N_min, G_max)
+        responsive_windows, responsive_dir = save_responsive_windows(W, S, N_min, G_max, getattr(args, "bp_TR_snap", "preceding"))
         interval_dir = responsive_artifact_paths[2].parent
         responsive_intervals = save_responsive_intervals(
-            responsive_windows, interval_dir, G_max, trim=args.trim_responsive_intervals
+            responsive_windows, interval_dir, G_max, trim=args.trim_responsive_intervals,
+            bp_TR_snap=getattr(args, "bp_TR_snap", "preceding")
         )
         scatter_responsive_intervals(responsive_intervals, RAW_DATA_DIR, interval_dir)
 
@@ -442,7 +465,7 @@ def get_nonresponsive_segments(args):
     if args.rebuild_segment_arrays or not all(path.exists() for path in nonresponsive_artifact_paths):
         T_min = args.nonresponsive_min_gap
         TR, SW = args.segment_length, args.segment_stride
-        bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(T_min, overwrite=True)
+        bounded, end_intervals, whole_runs, nonresponsive_dir = save_nonresponsive_intervals(T_min, overwrite=True, bp_TR_snap=getattr(args, "bp_TR_snap", "preceding"))
         scatter_non_responsive_intervals(bounded, whole_runs, end_intervals, RAW_DATA_DIR, nonresponsive_dir)
 
         return save_nonresponsive_segments(bounded, end_intervals, whole_runs, nonresponsive_dir, TR, SW)
@@ -453,7 +476,7 @@ def get_segment_dir_name(args):
     W, S, N_min, G_max = args.responsive_window_size, args.responsive_window_stride, args.responsive_min_bp_trs, args.responsive_max_bp_gap
     T_min = args.nonresponsive_min_gap
     TR, SW = args.segment_length, args.segment_stride
-    suffix = ",trim" if args.trim_responsive_intervals else ""
+    suffix = (",trim" if args.trim_responsive_intervals else "") + bp_cache_suffix(getattr(args, "bp_TR_snap", "preceding"))
     return f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW}{suffix})"
 
 def get_segment_dir(args):
@@ -883,14 +906,14 @@ def main():
 def parse_folder_name(folder_name):
     """Return settings details as a dictionary from a segment-configuration folder name."""
     pattern = (r"R\(W=(\d+),S=(\d+),N_min=(\d+),G_max=(\d+)\):"
-               r"NR\(T_min=(\d+)\):Segment\(TR=(\d+),SW=(\d+)(,trim)?\)")
+               r"NR\(T_min=(\d+)\):Segment\(TR=(\d+),SW=(\d+)(,trim)?(?:,BP=(nearest|preceding))?\)")
     match = re.fullmatch(pattern, folder_name)
     if not match:
         raise ValueError(f"Unrecognized segment folder name: {folder_name}")
     names = ["responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
              "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride"]
     return {**dict(zip(names, map(int, match.groups()[:7]))),
-            "trim": bool(match.group(8))}
+            "trim": bool(match.group(8)), "BP": match.group(9) or "preceding"}
 
 def participant_summary_metrics(predictions):
     """Return accuracy averaged equally across participants."""
@@ -1040,7 +1063,7 @@ def summarize():
 
     columns = [
         "responsive_window_size", "responsive_window_stride", "responsive_min_bp_trs",
-        "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim",
+        "responsive_max_bp_gap", "nonresponsive_min_gap", "segment_length", "segment_stride", "trim", "BP",
         "roi", "model", "pool", "hidden", "drop", "epochs", "batch", "lr", "wd", "analysis", "balance", "innerCV", "meanEpoch", "seed", "n_segments", "n_responsive",
         "n_nonresponsive", "pooled_train_accuracy", "pooled_test_accuracy",
         "participant_averaged_accuracy", "responsive_recall", "nonresponsive_recall",
@@ -1101,7 +1124,7 @@ def bootstrap_specific(n_bootstrap=10000, bootstrap_seed=0):
                 model=config["model"], pool=config["pool"], hidden=config["hidden"],
                 drop=config["drop"], epochs=config["epochs"], batch=config["batch"],
                 LR=config["lr"], WD=config["wd"], analysis=config["analysis"],
-                balance=config["balance"], innerCV=config["innerCV"],
+                balance=config["balance"], innerCV=config["innerCV"], BP=config["BP"],
             )
             output = folder / "bootstrap_ci.csv"
             if output.exists() and output.stat().st_size > 0:
