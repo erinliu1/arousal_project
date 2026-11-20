@@ -1,0 +1,27 @@
+baseline,additional_excluded_roi,n_seed_pairs,mean_BA,baseline_mean_BA,mean_balanced_accuracy_change,std_balanced_accuracy_change,improved_seeds
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,caudalanteriorcingulate,10,0.8056371331088897,0.8126903097441384,-0.007053176635248526,0.015215466119679989,"[123, 789, 2048]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,caudalmiddlefrontal,10,0.8112788229416747,0.8126903097441384,-0.0014114868024636684,0.010525589605647328,"[42, 123, 314, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,cuneus,10,0.8051250504732007,0.8126903097441384,-0.007565259270937463,0.009609253448014445,"[123, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,frontalpole,10,0.8053307350028904,0.8126903097441384,-0.007359574741247909,0.008055937037154848,"[123, 789]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,insula,10,0.806961842592796,0.8126903097441384,-0.0057284671513424534,0.012969387504652496,"[42, 123, 789, 2048]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,isthmuscingulate,10,0.7956003001450835,0.8126903097441384,-0.017090009599054844,0.009919447021809977,[]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,lateraloccipital,10,0.8074723952336005,0.8126903097441384,-0.005217914510537991,0.017910794801613963,"[123, 258, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,lateralorbitofrontal,10,0.8099129366389206,0.8126903097441384,-0.0027773731052177287,0.01077469539159992,"[42, 123, 789, 258, 1024, 2048]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,lingual,10,0.7945039257673091,0.8126903097441384,-0.01818638397682921,0.011217086891546027,[]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,medialorbitofrontal,10,0.8039123964842048,0.8126903097441384,-0.00877791325993348,0.011912321018449704,"[123, 456, 2048]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,LD,10,0.8052652778304406,0.8126903097441384,-0.007425031913697633,0.020690966267130725,"[123, 789, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,MD,10,0.794591201997242,0.8126903097441384,-0.01809910774689626,0.018539682966435607,"[456, 789]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,PUL,10,0.7900194109785781,0.8126903097441384,-0.022670898765560176,0.011994114000864765,[]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,VA,10,0.8043846327313802,0.8126903097441384,-0.008305677012758172,0.01667625401416431,"[42, 123, 789]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,VLa,10,0.7896436641914011,0.8126903097441384,-0.02304664555273722,0.011997852935986025,[789]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,VLp,10,0.8093759084344626,0.8126903097441384,-0.003314401309675641,0.01657773757441057,"[456, 789, 258, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,VPL,10,0.7939987946301171,0.8126903097441384,-0.018691515114021194,0.01348999085819843,[123]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,paracentral,10,0.7981839293328624,0.8126903097441384,-0.014506380411275898,0.010349729271994654,[1024]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,parahippocampal,10,0.8050916566718087,0.8126903097441384,-0.007598653072329498,0.018212105943311702,"[123, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,pericalcarine,10,0.7968023106914047,0.8126903097441384,-0.015887999052733602,0.009407545703873548,[123]
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,posteriorcingulate,10,0.8016490351386608,0.8126903097441384,-0.011041274605477514,0.016914406283515617,"[123, 456]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,precuneus,10,0.8019739594870658,0.8126903097441384,-0.010716350257072382,0.01319710294964065,"[123, 789, 258]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,rostralanteriorcingulate,10,0.807788006569665,0.8126903097441384,-0.0049023031744732885,0.014728983209509033,"[123, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,superiorfrontal,10,0.8054401628978901,0.8126903097441384,-0.007250146846248151,0.01519829460127336,"[123, 789, 2026, 258]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,superiorparietal,10,0.8112535447653221,0.8126903097441384,-0.0014367649788162185,0.012928850016645685,"[123, 789, 2026, 1024]"
+thalamic_rois+cortical_rois_exclude_entorhinal+fusiform+rostralmiddlefrontal+AV+CM,temporalpole,10,0.8066722744305259,0.8126903097441384,-0.006018035313612358,0.013386445693181172,"[456, 258, 2048]"

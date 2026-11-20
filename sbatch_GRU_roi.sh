@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=GRU_TC_exclude5_CPU
+#SBATCH --job-name=GRU_TC_exclude6_CPU
 #SBATCH --partition=ou_bcs_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -9,15 +9,16 @@
 #SBATCH --array=201-259
 #SBATCH --mail-user=erinliu@mit.edu
 #SBATCH --mail-type=FAIL,TIME_LIMIT
-#SBATCH --output=logs/GRU_TC_exclude5_CPU_%A_%a.out
-#SBATCH --error=logs/GRU_TC_exclude5_CPU_%A_%a.err
+#SBATCH --output=logs/GRU_TC_exclude6_CPU_%A_%a.out
+#SBATCH --error=logs/GRU_TC_exclude6_CPU_%A_%a.err
 
 # Submit from the cluster project directory:
 #   mkdir -p logs && sbatch sbatch_GRU_roi.sh
 # 260 CPU tasks: 26 additional single-ROI removals x 10 seeds; no concurrency cap.
-# Start with 27 ROIs (thalamus + cortex minus entorhinal, fusiform, AV, CM).
-# Remove one additional ROI independently per configuration, leaving 26 ROIs.
-# The additional superiorparietal removal is omitted; completed runs are skipped.
+# Start with 26 ROIs: thalamus + cortex minus entorhinal, fusiform, AV, CM,
+# and rostralmiddlefrontal.
+# Remove one additional ROI independently per configuration, leaving 25 ROIs.
+# All 26 remaining ROIs are candidates; completed runs are skipped.
 # Each task runs full outer LOPO, HD=64, WD=0.001, 30 fixed epochs.
 set -euo pipefail
 
@@ -44,10 +45,10 @@ export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export MKL_DYNAMIC=FALSE
 
-ADDITIONAL_ROI=$(python -c 'import sys; from GRU import resolve_rois; rois, _ = resolve_rois(["thalamic_rois", "cortical_rois"], ["entorhinal", "fusiform", "AV", "CM"]); assert len(rois) == 27; candidates = [roi for roi in rois if roi != "superiorparietal"]; assert len(candidates) == 26; print(candidates[int(sys.argv[1])])' "$ROI_INDEX")
-EXCLUDED_ROIS=(entorhinal fusiform AV CM "$ADDITIONAL_ROI")
+ADDITIONAL_ROI=$(python -c 'import sys; from GRU import resolve_rois; rois, _ = resolve_rois(["thalamic_rois", "cortical_rois"], ["entorhinal", "fusiform", "AV", "CM", "rostralmiddlefrontal"]); assert len(rois) == 26; print(rois[int(sys.argv[1])])' "$ROI_INDEX")
+EXCLUDED_ROIS=(entorhinal fusiform AV CM rostralmiddlefrontal "$ADDITIONAL_ROI")
 # Derive the exact canonical folder label used by GRU.py.
-ROI_LABEL=$(python -c 'import sys; from GRU import resolve_rois; rois, label = resolve_rois(["thalamic_rois", "cortical_rois"], sys.argv[1:]); assert len(rois) == 26; print(label)' "${EXCLUDED_ROIS[@]}")
+ROI_LABEL=$(python -c 'import sys; from GRU import resolve_rois; rois, label = resolve_rois(["thalamic_rois", "cortical_rois"], sys.argv[1:]); assert len(rois) == 25; print(label)' "${EXCLUDED_ROIS[@]}")
 RESULTS_ROOT="plots/GRU/segments/R(W=30,S=1,N_min=8,G_max=4):NR(T_min=20):Segment(TR=40,SW=40)"
 MODEL_DIR="model=GRU,pool=final,hidden=64,drop=0.2,epochs=30,batch=32,LR=1e-3,WD=1e-3"
 RUN_DIR="$RESULTS_ROOT/$ROI_LABEL/$MODEL_DIR/LOPO/SEED=$SEED"

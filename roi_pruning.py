@@ -10,6 +10,7 @@ Uses available completed seed pairs for each ROI; n_seed_pairs reports the count
 For thalamus + cortex exclude4, the baseline excludes fusiform, AV, CM.
 For thalamus + cortex exclude5, the baseline excludes fusiform, AV, CM,
 and entorhinal; changes measure the effect of the fifth removal only.
+For exclude6, the baseline additionally excludes rostralmiddlefrontal.
 """
 
 import argparse
@@ -128,6 +129,8 @@ def main():
             fixed_exclusions = FIXED_EXCLUSIONS[:3]
         elif args.exclude_count == 5:
             fixed_exclusions = FIXED_EXCLUSIONS
+        elif args.exclude_count == 6:
+            fixed_exclusions = FIXED_EXCLUSIONS + ("rostralmiddlefrontal",)
     if args.exclude_count > 1:
         exclusions = []
         root = args.segments_root / SEGMENT_CONFIG
