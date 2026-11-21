@@ -44,7 +44,7 @@ def return_config_folder(rois="all_rois", W=30, S=1, N_min=8, G_max=4, T_min=20,
 
 
 def load_predictions(config_folder, analysis):
-    nested_outer_dir = (config_folder if config_folder.name == "outer_LOPO"
+    nested_outer_dir = (config_folder if config_folder.name == "outer_LOPO" or any(config_folder.glob("seed=*/predictions.csv"))
                         else config_folder / "outer_LOPO")
     nested_paths = sorted(
         nested_outer_dir.glob("seed=*/predictions.csv"),
@@ -94,6 +94,15 @@ def load_predictions(config_folder, analysis):
 
 def bootstrap_output_path(config_folder, prediction_paths):
     """Place nested-GRU intervals beside its aggregate evaluation summaries."""
+    if prediction_paths and all(
+            path.name == "predictions.csv"
+            and path.parent.name.startswith("seed=")
+            and path.parent.parent.parent.name == "outer_LOPO"
+            for path in prediction_paths):
+        roi_dir = prediction_paths[0].parent.parent
+        evaluation_dir = roi_dir.parent.parent / "evaluation" / roi_dir.name
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        return evaluation_dir / "bootstrap_ci.csv"
     if prediction_paths and all(
             path.name == "predictions.csv"
             and path.parent.name.startswith("seed=")
