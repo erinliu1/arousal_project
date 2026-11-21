@@ -19,9 +19,9 @@ def format_rate(value):
 def return_config_folder(rois="all_rois", W=30, S=1, N_min=8, G_max=4, T_min=20,
                          TR=10, SW=10, trim=False, model="GRU", pool="final", hidden=64,
                          drop=0.2, epochs=30, batch=32, LR=1e-3, WD=1e-2,
-                         analysis="lopo", balance="participant", innerCV=0, C=0.01, FD=0.25):
+                         analysis="lopo", balance="participant", innerCV=0, C=0.01, FD=0.25, BP="preceding"):
     """Return the results folder matching a training configuration."""
-    trim_suffix = ",trim" if trim else ""
+    trim_suffix = (",trim" if trim else "") + (",BP=nearest" if BP == "nearest" else "")
     segment = f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW}{trim_suffix})"
     analysis_dir = analysis.upper()
     if model == "GRU":
@@ -150,6 +150,8 @@ def bootstrap_metrics(predictions, participants, samples):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("results_path", nargs="?", type=Path,
+                        help="Results directory containing SEED=*/lopo_predictions.csv; relative to the current directory")
     specs = {
         "rois": (str, "all_rois"), "W": (int, 30), "S": (int, 1), "N_min": (int, 8),
         "G_max": (int, 4), "T_min": (int, 20), "TR": (int, 10), "SW": (int, 10),
@@ -167,6 +169,10 @@ def parse_args(argv=None):
     parser.add_argument("--n-bootstrap", type=int, default=B)
     parser.add_argument("--bootstrap-seed", type=int, default=0)
     args = parser.parse_args(argv)
+    if args.results_path is not None:
+        if args.predictions_folder is not None:
+            parser.error("Use either results_path or --predictions-folder, not both")
+        args.predictions_folder = args.results_path
     if args.n_bootstrap < 1:
         parser.error("--n-bootstrap must be at least 1")
     return args

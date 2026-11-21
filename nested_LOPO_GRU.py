@@ -11,13 +11,15 @@ from GRU import ArousalDataset, load_segments, resolve_rois, run_fold
 
 
 SEEDS = (42, 123, 456, 789, 2026, 12, 314, 258, 1024, 2048)
-HIDDEN_SIZES = (16, 32, 64)
+HIDDEN_SIZES = (32, 64)
 WEIGHT_DECAYS = (1e-2, 3e-3, 1e-3)
-ROOT = Path("plots/GRU/nested_LOPO_2")
+ROOT = Path("plots/GRU/nested_LOPO,BP=preceding")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bp_TR_snap", choices=("nearest", "preceding"), default="preceding",
+                        help="Button-press snapping mode; separates segment caches and nested output roots.")
     parser.add_argument("--run", choices=("inner_lopo", "eval"), default="inner_lopo")
     parser.add_argument("--summarize", action="store_true",
                         help="Summarize completed outer-LOPO seeds for the selected ROI grouping.")
@@ -68,13 +70,19 @@ def configuration_name(hidden_size, weight_decay):
     return f"hidden={hidden_size},WD={scientific(weight_decay)}"
 
 
+def result_root(args=None):
+    mode = getattr(args, "bp_TR_snap", "preceding")
+    return ROOT.parent / f"nested_LOPO,BP={mode}"
+
+
 def roi_dir(args):
-    return ROOT / args.roi_label
+    return result_root(args) / args.roi_label
 
 
 def training_args(args, hidden_size, weight_decay, seed):
     """Build the GRU arguments shared by inner and outer folds."""
     return argparse.Namespace(
+        bp_TR_snap=getattr(args, "bp_TR_snap", "preceding"),
         seed=seed,
         hidden_size=hidden_size,
         weight_decay=weight_decay,
@@ -401,12 +409,13 @@ def bootstrap_outer(args):
     ])
 
 
-def visualize_results():
+def visualize_results(args=None):
     """Plot seed means and participant-bootstrap intervals for completed ROI selections."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    root = result_root(args)
     preferred_order = (
         "all_rois",
         "aan_rois",
@@ -435,7 +444,7 @@ def visualize_results():
     colors = ("#0072B2", "#009E73", "#CC79A7")
 
     discovered = []
-    for roi_folder in ROOT.iterdir() if ROOT.exists() else ():
+    for roi_folder in root.iterdir() if root.exists() else ():
         if not roi_folder.is_dir():
             continue
         evaluation = roi_folder / "evaluation"
@@ -456,7 +465,7 @@ def visualize_results():
         ))
     if not discovered:
         raise FileNotFoundError(
-            f"No completed seed_mean_std.csv/bootstrap_ci.csv pairs found under {ROOT}")
+            f"No completed seed_mean_std.csv/bootstrap_ci.csv pairs found under {root}")
 
     order = {name: index for index, name in enumerate(preferred_order)}
     discovered.sort(key=lambda item: (
@@ -496,8 +505,8 @@ def visualize_results():
             ax.spines[["top", "right"]].set_visible(False)
         fig.suptitle("Nested LOPO GRU Performance by ROI Groups", fontsize=32)
 
-    ROOT.mkdir(parents=True, exist_ok=True)
-    output = ROOT / "nested_lopo_roi_comparison.png"
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / "nested_lopo_roi_comparison.png"
     fig.savefig(output, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved {output}", flush=True)
@@ -507,7 +516,7 @@ def visualize_results():
 def main():
     args = parse_args()
     if args.visualize:
-        visualize_results()
+        visualize_results(args)
     elif args.bootstrap:
         bootstrap_outer(args)
     elif args.summarize:
