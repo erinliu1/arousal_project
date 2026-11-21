@@ -7,6 +7,9 @@ Default WD is 0.003 for all_rois and 0.001 for thalamus + cortex.
 Change = pruned balanced accuracy - baseline balanced accuracy (fraction units).
 Positive changes indicate improvement after pruning. SD uses ddof=1.
 Uses available completed seed pairs for each ROI; n_seed_pairs reports the count.
+For thalamus + cortex exclude2, the baseline excludes fusiform.
+For exclude3, new runs use fusiform + entorhinal as baseline; the historical
+fusiform + AV + CM row retains the unpruned baseline.
 For thalamus + cortex exclude4, the baseline excludes fusiform, AV, CM.
 For thalamus + cortex exclude5, the baseline excludes fusiform, AV, CM,
 and entorhinal; changes measure the effect of the fifth removal only.
@@ -82,8 +85,7 @@ def calculate_averages(segments_root, base_label="all_rois", rois=None, model_co
         changes = np.asarray(changes, dtype=float)
         rows.append({
             "baseline": baseline_display,
-            **({"additional_excluded_roi": next(iter(additional))}
-               if fixed_exclusions else {"excluded_roi": roi}),
+            "excluded_roi": next(iter(additional)) if fixed_exclusions else roi,
             "n_seed_pairs": len(paired_seeds),
             "mean_BA": float(np.mean(pruned_scores)) if paired_seeds else np.nan,
             "baseline_mean_BA": float(np.mean(baseline_scores)) if paired_seeds else np.nan,
@@ -125,7 +127,9 @@ def main():
         parser.error("--exclude-count must be at least 1.")
     fixed_exclusions = ()
     if base_label == "thalamic_rois+cortical_rois":
-        if args.exclude_count == 4:
+        if args.exclude_count == 2:
+            fixed_exclusions = ("fusiform",)
+        elif args.exclude_count == 4:
             fixed_exclusions = FIXED_EXCLUSIONS[:3]
         elif args.exclude_count == 5:
             fixed_exclusions = FIXED_EXCLUSIONS
@@ -147,7 +151,20 @@ def main():
         args.output = Path("plots/GRU/results") / f"{base_label}_exclude{args.exclude_count}_averages.csv"
     # Validate available results before writing; missing or incomplete pairs are skipped.
     try:
-        result = calculate_averages(args.segments_root, base_label, rois, model_config, fixed_exclusions)
+        if args.exclude_count == 3 and base_label == "thalamic_rois+cortical_rois":
+            legacy = [roi for roi in rois if set(roi.split("+")) == {"fusiform", "AV", "CM"}]
+            incoming = [roi for roi in rois if {"fusiform", "entorhinal"}.issubset(roi.split("+"))]
+            parts = []
+            if legacy:
+                parts.append(calculate_averages(args.segments_root, base_label, legacy, model_config))
+            if incoming:
+                parts.append(calculate_averages(args.segments_root, base_label, incoming, model_config,
+                                                ("fusiform", "entorhinal")))
+            if not parts:
+                raise ValueError("No historical or fusiform+entorhinal exclude3 configurations found.")
+            result = pd.concat(parts, ignore_index=True)
+        else:
+            result = calculate_averages(args.segments_root, base_label, rois, model_config, fixed_exclusions)
     except (FileNotFoundError, ValueError, KeyError) as error:
         parser.exit(1, f"Cannot calculate the pruning summary: {error}\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
