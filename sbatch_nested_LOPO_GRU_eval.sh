@@ -14,7 +14,7 @@
 
 # Submit after all 200 new inner jobs complete.
 # mkdir -p logs && sbatch sbatch_nested_LOPO_GRU_eval.sh
-# Ten CPU jobs: all_rois only, one seed each, selecting across all nine HD/WD combinations.
+# Ten CPU jobs: cortical + thalamic only, one seed each, selecting across all nine HD/WD combinations.
 set -euo pipefail
 PROJECT_DIR=/orcd/data/ldlewis/001/om/erinliu/Arousal_Project
 SEEDS=(42 123 456 789 2026 12 314 258 1024 2048)
@@ -35,6 +35,6 @@ export NUMEXPR_NUM_THREADS=1
 export MKL_DYNAMIC=FALSE
 
 # Serialize ranking writes across array tasks. Global/pruning rankings remain untouched.
-flock "plots/GRU/nested_LOPO,BP=nearest/.all_rois_ranking.lock" \
-    python -u nested_LOPO_GRU_new.py --get_best_starting_config --rois all_rois
-python -u nested_LOPO_GRU_new.py --eval --rois all_rois --seed "$SEED"
+flock "plots/GRU/nested_LOPO,BP=nearest/.thalamic_cortical_ranking.lock" \
+    python -u nested_LOPO_GRU_new.py --get_best_starting_config --rois thalamic_rois cortical_rois
+python -u nested_LOPO_GRU_new.py --eval --rois thalamic_rois cortical_rois --seed "$SEED"
