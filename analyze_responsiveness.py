@@ -19,94 +19,110 @@ RAW_DATA = Path('raw_data')
 INTERVAL_FREQ_PATH = SAVE_PATH / 'interval_freq'
 INTERVAL_FREQ_PATH.mkdir(parents=True, exist_ok=True)
 
-def get_interval_frequency_distribution(nonresponsive_threshold=20):
-    # for each participant, calculate the fraction of intervals that are equal to 1, 2, ..., nonresponsive_threshold-1, computed after removing sustained non-responsive intervals. 
-    # Return a dataframe with columns = 'participant', 'interval', 'fraction'
+def plot_responsive_intervals_pooled(bp_TR_snap="nearest"):
+    """Plot canonical merged responsive intervals pooled across each participant's runs."""
+    from GRU import save_responsive_windows, save_responsive_intervals
+    suffix = ",BP=nearest" if bp_TR_snap == "nearest" else ""
+    source = Path("plots/GRU/responsiveness") / f"W=30,S=1,N_min=8,G_max=4{suffix}" / "responsive_intervals.csv"
+    if not source.exists():
+        windows, folder = save_responsive_windows(30, 1, 8, 4, bp_TR_snap)
+        save_responsive_intervals(windows, folder, 4, bp_TR_snap=bp_TR_snap)
+    intervals = pd.read_csv(source)
+    participants = sorted([p.name for p in RAW_DATA.iterdir() if p.is_dir()],
+                          key=lambda name: int(name.split("_")[-1]))
+    colors = dict(zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants)))))
+    fig, ax = plt.subplots(figsize=(20, 6), layout="constrained")
+    rng = np.random.default_rng(0)
+    for i, participant in enumerate(participants):
+        values = intervals.loc[intervals.participant.eq(participant), "duration_TRs"].to_numpy()
+        ax.scatter(i + rng.uniform(-.18, .18, len(values)), values,
+                   marker="o", s=110, color=colors[participant], alpha=.65, zorder=3)
+    ax.set_xticks(range(len(participants)), [str(int(p.split("_")[-1])) for p in participants])
+    ax.set_xlim(-.5, len(participants) - .5)
+    for boundary in np.arange(.5, len(participants) - .5):
+        ax.axvline(boundary, color=".75", linewidth=2, zorder=0)
+    ax.set_xlabel("Participant", fontsize=30, labelpad=15)
+    ax.set_ylabel("Interval duration (TRs)", fontsize=30, labelpad=15)
+    ax.set_title("Responsive intervals", fontsize=34, pad=18)
+    ax.tick_params(axis="both", labelsize=26, width=2.5, length=9)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", alpha=.4, linewidth=1.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_linewidth(2.5)
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    destination.mkdir(parents=True, exist_ok=True)
+    output = destination / "responsive_intervals_by_participant.png"
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+    print(f"Saved {output} ({len(intervals)} responsive intervals)")
+    return output
 
-    df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
-    participant_bp_intervals = get_participant_bp_intervals(df)
 
-    max_interval = nonresponsive_threshold - 1
-    interval_lengths = np.arange(1, max_interval + 1)
+def get_interval_frequency_distribution(nonresponsive_threshold=20, bp_TR_snap="nearest"):
+    """Within-participant frequency conditional on interval length <= threshold.
 
+    Intervals are computed within runs then pooled; exactly 20 TRs is retained.
+    """
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    source = destination / "bp_intervals.csv"
+    if not source.exists():
+        from analyze_non_responsiveness import plot_pooled_bp_intervals
+        plot_pooled_bp_intervals(bp_TR_snap, output_dir=destination)
+    intervals = pd.read_csv(source)
+    intervals = intervals.loc[intervals.interval.le(nonresponsive_threshold)]
     rows = []
-    for _, row in participant_bp_intervals.iterrows():
-        participant = row["participant"]
-        intervals = np.asarray(row["intervals"])
-        intervals = intervals[intervals < nonresponsive_threshold] # remove sustained non-responsive intervals
-        if len(intervals) == 0:
-            continue
-        for k in interval_lengths:
-            fraction = np.mean(intervals == k)
-            rows.append({
-                "participant": participant,
-                "interval": k,
-                "fraction": fraction
-            })
-    df = pd.DataFrame(rows)
-    df.to_csv(INTERVAL_FREQ_PATH / 'interval_frequency_distribution.csv', index=False)
-    return df
+    for participant, group in intervals.groupby("participant"):
+        for k in range(1, nonresponsive_threshold + 1):
+            rows.append(dict(participant=participant, interval=k,
+                             fraction=float(group.interval.eq(k).mean())))
+    result = pd.DataFrame(rows)
+    result.to_csv(destination / f"interval_frequency_distribution_le{nonresponsive_threshold}.csv", index=False)
+    return result
 
-def plot_interval_frequency_distribution(nonresponsive_threshold=20):
-    df = get_interval_frequency_distribution(nonresponsive_threshold=nonresponsive_threshold)
 
-    participants = df['participant'].unique()
-    colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
-    participant_colors = dict(zip(participants, colors))
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    for participant, group in df.groupby("participant"):
-        ax.plot(
-            group["interval"],
-            group["fraction"],
-            marker="o",
-            alpha=0.7,
-            color=participant_colors[participant],
-            label=participant
-        )
-
-    max_interval = nonresponsive_threshold - 1
-    max_y = df.loc[df["interval"] == max_interval, "fraction"].max()
-    ax.axhline(max_y, linestyle="--", color="grey", linewidth=1, alpha=0.7)
-    ax.text(
-        0.82, 0.1,
-        f"max fraction @ {max_interval} TRs = {max_y * 100:.2f}%",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=10,
-        color="grey"
-    )
-    ax.set_xlabel("Button press interval (TRs)")
-    ax.set_ylabel("Fraction of intervals of this length")
-    ax.set_xticks(np.arange(1, max_interval + 1))
-    ax.set_title(f"Distribution of BP intervals < {nonresponsive_threshold} TRs")
-    ax.legend(
-        loc="upper right",
-        ncol=2,
-    )
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(INTERVAL_FREQ_PATH / 'interval_frequency_distribution.png', dpi=300)
-    plt.show()
-    plt.close()
+def plot_interval_frequency_distribution(nonresponsive_threshold=20, bp_TR_snap="nearest"):
+    from analyze_non_responsiveness import plot_interval_frequency_distribution as plot_distribution
+    # Reuse the same styling and numeric participant legend as the full distribution.
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    get_interval_frequency_distribution(nonresponsive_threshold, bp_TR_snap)
+    intervals = pd.read_csv(destination / "bp_intervals.csv")
+    intervals = intervals.loc[intervals.interval.le(nonresponsive_threshold)]
+    pooled = get_participant_bp_intervals(intervals)
+    # A separate output directory avoids replacing the unfiltered distribution.
+    import tempfile
+    with tempfile.TemporaryDirectory() as temporary:
+        plot_distribution(pooled, max_interval=nonresponsive_threshold, output_dir=temporary,
+                          title=f"Distribution of button press intervals ≤ {nonresponsive_threshold} TRs",
+                          show=False)
+        output = destination / f"interval_frequency_distribution_le{nonresponsive_threshold}.png"
+        output.write_bytes((Path(temporary) / "interval_frequency_distribution.png").read_bytes())
+    print(f"Saved {output}")
+    return output
 
 # plot_interval_frequency_distribution(nonresponsive_threshold=20)
 
 INTERVAL_QUANTILE_PATH = SAVE_PATH / 'interval_quantiles'
 INTERVAL_QUANTILE_PATH.mkdir(parents=True, exist_ok=True)
 
-def summarize_interval_quantiles(nonresponsive_threshold=20):
+def summarize_interval_quantiles(nonresponsive_threshold=20, bp_TR_snap=None):
     """After removing intervals at or above the non-response threshold,
     compute the median and selected upper quantiles.
     """
-    df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
+    destination = INTERVAL_QUANTILE_PATH
+    if bp_TR_snap is None:
+        df = pd.read_csv(Path('plots/analyze_button_presses') / 'bp_intervals.csv')
+    else:
+        destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+        if not (destination / "bp_intervals.csv").exists():
+            from analyze_non_responsiveness import plot_pooled_bp_intervals
+            plot_pooled_bp_intervals(bp_TR_snap)
+        df = pd.read_csv(destination / "bp_intervals.csv")
     participant_df = get_participant_bp_intervals(df)
     rows = []
     for _, row in participant_df.iterrows():
         participant = row["participant"]
         intervals = np.asarray(row["intervals"])
-        intervals = intervals[intervals < nonresponsive_threshold]
+        intervals = intervals[intervals <= nonresponsive_threshold] if bp_TR_snap is not None else intervals[intervals < nonresponsive_threshold]
         if len(intervals) == 0:
             continue
         rows.append({
@@ -118,26 +134,36 @@ def summarize_interval_quantiles(nonresponsive_threshold=20):
             "q95": np.quantile(intervals, 0.95)
         })
     out_df = pd.DataFrame(rows)
-    out_df.to_csv(INTERVAL_QUANTILE_PATH / "interval_quantiles_by_participant.csv", index=False)
+    name = "interval_quantiles_by_participant" + (f"_le{nonresponsive_threshold}" if bp_TR_snap else "")
+    out_df.to_csv(destination / f"{name}.csv", index=False)
     return out_df
 
-def plot_interval_quantiles(nonresponsive_threshold=20):
-    df = summarize_interval_quantiles(nonresponsive_threshold=nonresponsive_threshold)
-    df['participant_num'] = (df['participant'].str.split('_').str[-1].astype(int))
+def plot_interval_quantiles(nonresponsive_threshold=20, bp_TR_snap=None):
+    df = summarize_interval_quantiles(nonresponsive_threshold, bp_TR_snap)
+    df['participant_num'] = df.participant.str.split('_').str[-1].astype(int)
     df = df.sort_values('participant_num')
-    fig, ax = plt.subplots(figsize=(8, 4))
-    # ax.bar(df["participant_num"], df["q95"], label="95th percentile", alpha=0.5, color='lightblue')
-    ax.bar(df["participant_num"], df["q90"], label="90th percentile", alpha=0.5, color='lightblue')
-    # ax.bar(df["participant_num"], df["q75"], label="75th percentile")
-    ax.bar(df["participant_num"], df["median"], label="Median")
-    ax.set_xlabel("Participant")
-    ax.set_ylabel("BP interval length (TRs)")
-    ax.set_xticks(df["participant_num"])
-    ax.legend()
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(INTERVAL_QUANTILE_PATH / "interval_quantiles_by_participant.png", dpi=300)
-    plt.close()
+    positions = np.arange(len(df))
+    fig, ax = plt.subplots(figsize=(16, 7), layout="constrained")
+    ax.bar(positions, df.q90, label="90th percentile", alpha=.6, color="lightblue", zorder=2)
+    ax.bar(positions, df['median'], label="Median", color="#2878A5", zorder=3)
+    ax.set_xlabel("Participant", fontsize=24, labelpad=12)
+    ax.set_ylabel("Button press interval length (TRs)", fontsize=24, labelpad=12)
+    ax.set_xticks(positions, df.participant_num.astype(str))
+    ax.tick_params(axis="both", labelsize=20, width=1.5, length=6)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", alpha=.3, linewidth=1.2)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(fontsize=18)
+    if bp_TR_snap:
+        ax.set_title(f"{bp_TR_snap.capitalize()} TR snapping: interval quantiles (≤{nonresponsive_threshold} TRs)",
+                     fontsize=24, pad=16)
+    destination = INTERVAL_QUANTILE_PATH if bp_TR_snap is None else Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    name = "interval_quantiles_by_participant" + (f"_le{nonresponsive_threshold}" if bp_TR_snap else "")
+    output = destination / f"{name}.png"
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+    print(f"Saved {output}")
+    return output
 
 def get_participants_with_high_quartile(quartile='q95', responsive_threshold=5, nonresponsive_threshold=20):
     df = summarize_interval_quantiles(nonresponsive_threshold=nonresponsive_threshold)
@@ -853,7 +879,21 @@ def plot_responsive_interval_counts(window_size=30, step_size=10, min_density=0.
     plt.close()
 
 if __name__ == "__main__":
-    # plot_responsive_windows()
-    # summarize_responsive_intervals()
-    # scatter_responsive_intervals()
-    plot_responsive_interval_counts()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--plot-responsive-pooled", action="store_true")
+    parser.add_argument("--plot-interval-frequency", action="store_true")
+    parser.add_argument("--plot-interval-quantiles", action="store_true")
+    parser.add_argument("--bp_TR_snap", choices=("nearest", "preceding"), default="nearest")
+    parser.add_argument("--max-interval", type=int, default=20)
+    args = parser.parse_args()
+    if args.plot_responsive_pooled:
+        plot_responsive_intervals_pooled(args.bp_TR_snap)
+    elif args.plot_interval_frequency:
+        if args.max_interval < 1:
+            parser.error("--max-interval must be positive")
+        plot_interval_frequency_distribution(args.max_interval, args.bp_TR_snap)
+    elif args.plot_interval_quantiles:
+        plot_interval_quantiles(args.max_interval, args.bp_TR_snap)
+    else:
+        plot_responsive_interval_counts()

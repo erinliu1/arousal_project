@@ -210,6 +210,82 @@ def plot_sleep_stage_proportions(stage_proportions=None):
     plt.close(fig)
     return output_path
 
+def plot_total_sleep_stage_time_nearest():
+    """Pool actual hypnogram overlap seconds over nearest-snapped 40-TR segments.
+
+    Use EEG-available participant/runs as in the original EEG analysis. Include
+    artifact and unscored time in each behavioral class's total denominator.
+    """
+    import matplotlib.pyplot as plt
+    metadata_path = Path("plots/GRU/segments") / (SEGMENT_CONFIG[:-1] + ",BP=nearest)") / "all_segment_metadata.csv"
+    metadata = pd.read_csv(metadata_path).merge(
+        get_eeg_participant_runs().drop_duplicates(["participant", "run"]),
+        on=["participant", "run"], how="inner")
+    if metadata.empty:
+        raise ValueError("No nearest-snapped segments have matching EEG runs")
+    runs = metadata[["participant", "run"]].drop_duplicates()
+    missing = [str(RAW_DATA_DIR / p / r / "sleep_scoring/hypno.json")
+               for p, r in runs.itertuples(index=False, name=None)
+               if not (RAW_DATA_DIR / p / r / "sleep_scoring/hypno.json").exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing hypnograms for {len(missing)} EEG runs; first: {missing[0]}")
+    rows = []
+    for (participant, run), segments in metadata.groupby(["participant", "run"]):
+        directory = RAW_DATA_DIR / participant / run
+        times = np.load(directory / "time_vector.npy")
+        tr = float(np.median(np.diff(times)))
+        with open(directory / "sleep_scoring/hypno.json") as file:
+            hypno = json.load(file)
+        if set(hypno) - set(SLEEP_STAGES):
+            raise ValueError(f"Unknown sleep stage in {participant} {run}")
+        for segment in segments.itertuples(index=False):
+            start = float(times[segment.segment_start_TR])
+            end = float(times[segment.segment_end_TR_exclusive]) if segment.segment_end_TR_exclusive < len(times) else float(times[-1] + tr)
+            durations = {stage: sum(max(0, min(end, b) - max(start, a))
+                                   for a, b in hypno.get(stage, [])) for stage in SLEEP_STAGES[:-1]}
+            if sum(durations.values()) > end - start + 1e-6:
+                raise ValueError(f"Overlapping sleep stages in {participant} {run}")
+            durations["Unscored"] = max(0, end - start - sum(durations.values()))
+            rows.append({"label": segment.label, **durations})
+    seconds = pd.DataFrame(rows).groupby("label")[list(SLEEP_STAGES)].sum()
+    proportions = seconds.div(seconds.sum(axis=1), axis=0)
+    stages = [stage for stage in SLEEP_STAGES if seconds[stage].sum() > 0]
+    colors = {'Wake': '#69B85A', 'N1': '#8EC5E8', 'N2': '#4C78A8', 'N3': '#263B80',
+              'REM': '#8B6BB1', 'Art': '#D16D6A', 'Unscored': '#B8B8B8'}
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7), layout="constrained")
+    for ax, label, title in zip(axes, ["responsive", "non-responsive"], ["Responsive", "Non-responsive"]):
+        values = proportions.loc[label, stages].to_numpy()
+        wedges, _, percentage_texts = ax.pie(values, colors=[colors[s] for s in stages],
+                             startangle=90, counterclock=False, radius=.85,
+                             autopct=lambda pct: f"{pct:.1f}%" if pct >= .05 else "",
+                             textprops={"fontsize": 20, "fontweight": "bold"})
+        small = [(wedge, text) for value, wedge, text in zip(values, wedges, percentage_texts)
+                 if value < .05 and text.get_text()]
+        small.sort(key=lambda item: np.cos(np.deg2rad((item[0].theta1 + item[0].theta2) / 2)))
+        for x, (wedge, text) in zip(np.linspace(-.55, .55, len(small)), small):
+            angle = np.deg2rad((wedge.theta1 + wedge.theta2) / 2)
+            text.set_position((x, .94))
+            text.set_ha("center")
+            text.set_va("bottom")
+            ax.plot([.83*np.cos(angle), x], [.83*np.sin(angle), .92],
+                    color=wedge.get_facecolor(), linewidth=2)
+        ax.set_ylim(-1.15, 1.2)
+        count = int(metadata.label.eq(label).sum())
+        ax.text(0, -.18, title, ha="center", va="center", color="white",
+                fontsize=24, fontweight="bold", zorder=5)
+    fig.legend(wedges, stages, loc="lower center", ncol=len(stages), frameon=False, fontsize=20)
+    fig.suptitle("Total proportion of segment time in each sleep stage", fontsize=23)
+    destination = Path("plots/button_press_analysis,nearest")
+    destination.mkdir(parents=True, exist_ok=True)
+    seconds.to_csv(destination / "total_sleep_stage_seconds_by_behavioral_class.csv")
+    proportions.to_csv(destination / "total_sleep_stage_proportions_by_behavioral_class.csv")
+    output = destination / "total_sleep_stage_proportions_by_behavioral_class.png"
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {output}")
+    return output
+
+
 def save_participant_sleep_stage_agreement(stage_proportions=None):
     """Save R Wake and NR sleep agreement over total and valid-scored duration."""
     if stage_proportions is None:
@@ -342,6 +418,13 @@ def plot_segment_counts_by_participant():
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--plot-total-sleep-stage-time-nearest", action="store_true")
+    args = parser.parse_args()
+    if args.plot_total_sleep_stage_time_nearest:
+        plot_total_sleep_stage_time_nearest()
+        raise SystemExit(0)
     metadata = load_all_segment_metadata()
     features = save_segment_eeg_features(metadata)
     features = add_within_participant_standardized_power(features)

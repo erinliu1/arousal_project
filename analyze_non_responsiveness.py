@@ -1,9 +1,10 @@
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, FuncFormatter
 
 SAVE_PATH = Path('plots/analyze_non_responsiveness')
 SAVE_PATH.mkdir(parents=True, exist_ok=True)
@@ -19,9 +20,67 @@ def get_participant_run_bp_intervals(button_press_intervals_df):
     return button_press_intervals_df.groupby(['participant', 'run'])['interval'].apply(list).reset_index().rename(columns={'interval': 'intervals'})
 
 
+def plot_nonresponsive_intervals_pooled(bp_TR_snap="nearest", threshold=20):
+    """Pool bounded nonresponsive intervals across runs; circles only."""
+    from GRU import save_nonresponsive_intervals
+    suffix = ",BP=nearest" if bp_TR_snap == "nearest" else ""
+    source = Path("plots/GRU/non_responsiveness") / f"T_min={threshold}{suffix}" / "non_responsive_intervals.csv"
+    if not source.exists():
+        save_nonresponsive_intervals(threshold, bp_TR_snap=bp_TR_snap)
+    intervals = pd.read_csv(source)
+    participants = sorted([p.name for p in RAW_DATA.iterdir() if p.is_dir()],
+                          key=lambda name: int(name.split("_")[-1]))
+    colors = dict(zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants)))))
+    fig, ax = plt.subplots(figsize=(20, 6), layout="constrained")
+    rng = np.random.default_rng(0)
+    for i, participant in enumerate(participants):
+        values = intervals.loc[intervals.participant.eq(participant), "duration_TRs"].to_numpy()
+        ax.scatter(i + rng.uniform(-.18, .18, len(values)), values,
+                   marker="o", s=110, color=colors[participant], alpha=.65, zorder=3)
+    ax.set_xticks(range(len(participants)), [str(int(p.split("_")[-1])) for p in participants])
+    ax.set_xlim(-.5, len(participants) - .5)
+    for boundary in np.arange(.5, len(participants) - .5):
+        ax.axvline(boundary, color=".75", linewidth=2, zorder=0)
+    ax.set_xlabel("Participant", fontsize=30, labelpad=15)
+    ax.set_ylabel("Interval duration (TRs)", fontsize=30, labelpad=15)
+    ax.set_title(f"Non-responsive intervals = button press intervals ≥ {threshold} TRs", fontsize=34, pad=18)
+    ax.tick_params(axis="both", labelsize=26, width=2.5, length=9)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", alpha=.4, linewidth=1.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_linewidth(2.5)
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    destination.mkdir(parents=True, exist_ok=True)
+    output = destination / "nonresponsive_intervals_by_participant.png"
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+    print(f"Saved {output} ({len(intervals)} bounded intervals)")
+    return output
+
+
+def plot_hazard_and_persistence(bp_TR_snap="nearest"):
+    """Regenerate all four summaries from unfiltered within-run BP intervals."""
+    global SAVE_PATH
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    if not (destination / "bp_intervals.csv").exists():
+        plot_pooled_bp_intervals(bp_TR_snap)
+    intervals = pd.read_csv(destination / "bp_intervals.csv")
+    pooled = get_participant_bp_intervals(intervals)
+    previous = SAVE_PATH
+    try:
+        SAVE_PATH = destination
+        plot_all_participant_hazards(pooled, max_interval=50, min_at_risk=20)
+        plot_participant_contributions(pooled, max_interval=50, min_at_risk=20)
+        plot_hazard_summary(pooled, max_interval=50, min_at_risk=20)
+        plot_persistence_summary(pooled, plot_future_TRs=[10], min_at_risk=20)
+    finally:
+        SAVE_PATH = previous
+    print(f"Saved hazard and persistence plots to {destination}")
+
+
 #### PARTICIPANT-WISE INTERVAL FREQUENCY DISTRIBUTION: COUNT FRACTION OF INTERVALS OF LENGTH 1, 2, ..., K TRs #####
 
-def get_interval_frequency_distribution(participant_bp_intervals, max_interval=15):
+def get_interval_frequency_distribution(participant_bp_intervals, max_interval=15, output_dir=None):
     # for each participant, calculate the fraction of intervals that are equal to 1, 2, ..., max_interval. Return a dataframe with columns = 'participant', 'interval', 'fraction'
     
     interval_lengths = np.arange(1, max_interval + 1)
@@ -40,11 +99,13 @@ def get_interval_frequency_distribution(participant_bp_intervals, max_interval=1
                 "fraction": fraction
             })
     df = pd.DataFrame(rows)
-    df.to_csv(SAVE_PATH / 'interval_frequency_distribution.csv', index=False)
+    destination = SAVE_PATH if output_dir is None else Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    df.to_csv(destination / 'interval_frequency_distribution.csv', index=False)
     return df
 
-def plot_interval_frequency_distribution(participant_bp_intervals, max_interval=15):
-    df = get_interval_frequency_distribution(participant_bp_intervals, max_interval=max_interval)
+def plot_interval_frequency_distribution(participant_bp_intervals, max_interval=15, output_dir=None, title=None, show=True):
+    df = get_interval_frequency_distribution(participant_bp_intervals, max_interval=max_interval, output_dir=output_dir)
 
     participants = df['participant'].unique()
     colors = plt.cm.tab20(np.linspace(0, 1, len(participants)))
@@ -59,21 +120,10 @@ def plot_interval_frequency_distribution(participant_bp_intervals, max_interval=
             marker="o",
             alpha=0.7,
             color=participant_colors[participant],
-            label=participant
+            label=str(int(str(participant).removeprefix("AAN_")))
         )
 
-    max_y = df.loc[df["interval"] == max_interval, "fraction"].max()
-    ax.axhline(max_y, linestyle="--", color="grey", linewidth=1, alpha=0.7)
-    ax.text(
-        0.82, 0.1,
-        f"max fraction @ {max_interval} TRs = {max_y * 100:.2f}%",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=10,
-        color="grey"
-    )
-    ax.set_xlabel("Button press interval (TRs)")
+    ax.set_xlabel("Button press interval length (TRs)")
     ax.set_ylabel("Fraction of intervals of this length")
     ax.set_xticks(np.arange(1, max_interval + 1))
 
@@ -83,9 +133,82 @@ def plot_interval_frequency_distribution(participant_bp_intervals, max_interval=
     )
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig(SAVE_PATH / 'interval_frequency_distribution.png', dpi=300)
-    plt.show()
+    if title:
+        ax.set_title(title, fontsize=10)
+        fig.tight_layout()
+    destination = SAVE_PATH if output_dir is None else Path(output_dir)
+    output = destination / 'interval_frequency_distribution.png'
+    plt.savefig(output, dpi=300)
+    if show:
+        plt.show()
     plt.close()
+    return output
+
+def plot_pooled_bp_intervals(bp_TR_snap="nearest", output_dir=None, max_interval=20):
+    """Plot within-run inter-press gaps pooled across runs for each participant.
+
+    Match GRU snapping: deduplicate occupied TRs, discard out-of-run indices.
+    End-of-run gaps and runs without two presses are not inter-press intervals.
+    Neither responsiveness nor motion filters are applied to this distribution.
+    """
+    from GRU import load_bp_TRs
+
+    destination = (Path(f"plots/button_press_analysis,{bp_TR_snap}")
+                   if output_dir is None else Path(output_dir))
+    destination.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for run_dir in sorted(RAW_DATA.glob("*/run*")):
+        if not run_dir.is_dir() or not (run_dir / "time_vector.npy").exists():
+            continue
+        n_trs = len(np.load(run_dir / "time_vector.npy"))
+        presses = np.unique(load_bp_TRs(run_dir, bp_TR_snap))
+        presses = presses[(presses >= 0) & (presses < n_trs)]
+        for start, end in zip(presses[:-1], presses[1:]):
+            rows.append(dict(participant=run_dir.parent.name, run=run_dir.name,
+                             start_TR=int(start), end_TR=int(end), interval=int(end - start)))
+    intervals = pd.DataFrame(rows)
+    if intervals.empty:
+        raise ValueError("No inter-press intervals found")
+    intervals.to_csv(destination / "bp_intervals.csv", index=False)
+    pooled = get_participant_bp_intervals(intervals)
+    pooled["order"] = pooled.participant.str.extract(r"(\d+)$", expand=False).astype(int)
+    pooled = pooled.sort_values("order").drop(columns="order").reset_index(drop=True)
+    fig, ax = plt.subplots(figsize=(18, 10), layout="constrained")
+    rng = np.random.default_rng(0)
+    colors = plt.cm.tab20(np.linspace(0, 1, len(pooled)))
+    for i, row in pooled.iterrows():
+        values = np.asarray(row.intervals)
+        ax.scatter(i + rng.uniform(-.22, .22, len(values)), values,
+                   s=18, alpha=.3, color=colors[i], rasterized=True, zorder=2)
+    ax.axhline(20, linestyle="--", color=".4", linewidth=2, label="20 TRs", zorder=1)
+    ax.set_yscale("log")
+    maximum = max(max(values) for values in pooled.intervals)
+    ticks = [value for value in (1, 2, 3, 4, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000)
+             if value <= maximum]
+    ax.set_yticks(ticks, [str(value) for value in ticks])
+    ax.tick_params(axis="y", which="minor", labelleft=False)
+    participant_numbers = pooled.participant.str.extract(r"(\d+)$", expand=False).astype(int)
+    ax.set_xticks(range(len(pooled)), participant_numbers.astype(str))
+    ax.set_xlim(-.5, len(pooled) - .5)
+    ax.set_xlabel("Participant", fontsize=26, labelpad=16)
+    ax.set_ylabel("Button press interval length (TRs)", fontsize=26, labelpad=16)
+    ax.set_title(f"Button-press intervals — {bp_TR_snap} TR snapping", fontsize=28, pad=20)
+    ax.tick_params(axis="both", which="major", labelsize=22, width=2, length=8)
+    ax.tick_params(axis="y", which="minor", width=1.5, length=4)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", color=".8", linewidth=1.3)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_linewidth(2)
+    ax.legend(fontsize=20)
+    scatter_path = destination / "bp_intervals_by_participant.png"
+    fig.savefig(scatter_path, dpi=200)
+    plt.close(fig)
+    frequency_path = plot_interval_frequency_distribution(
+        pooled, max_interval=max_interval, output_dir=destination,
+        title=f"Inter-press interval frequency — {bp_TR_snap} TR snapping", show=False)
+    print(f"Saved {scatter_path} and {frequency_path}")
+    return intervals, scatter_path, frequency_path
+
 
 #### HAZARD: PROBABILITY THAT AN INTERVAL ENDS AT EXACTLY k TRs GIVEN THAT IT HAS ALREADY LASTED ≥ k TRs #####
 
@@ -144,6 +267,8 @@ def plot_hazard(participant_bp_intervals, participant, max_interval=50):
 
 def plot_all_participant_hazards(participant_bp_intervals, max_interval=50, min_at_risk=20):
     fig, ax = plt.subplots(figsize=(8, 4))
+    participants = sorted(participant_bp_intervals["participant"].unique())
+    participant_colors = dict(zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants)))))
 
     for _, row in participant_bp_intervals.iterrows():
         participant = row["participant"]
@@ -157,12 +282,15 @@ def plot_all_participant_hazards(participant_bp_intervals, max_interval=50, min_
             hazard_df["hazard"],
             marker=None,
             alpha=0.5,
-            label=participant,
+            label=str(int(str(participant).removeprefix("AAN_"))),
+            color=participant_colors[participant],
             linewidth=2
         )
 
     ax.set_xlabel("k = # of TRs")
-    ax.set_ylabel("probability that len(interval) = exactly k TRs \n | len(interval) >= k TRs")
+    ax.set_ylabel("hazard")
+    ax.set_title("hazard = P( length of interval is exactly k TRs | length of interval ≥ k TRs )",
+                 fontsize=9)
     ax.set_ylim(0, 1)
     
     ax.legend(
@@ -191,7 +319,7 @@ def get_all_participant_hazards(participant_bp_intervals, max_interval=50, min_a
     return pd.concat(dfs, ignore_index=True)
 
 def summarize_hazards(participant_bp_intervals, max_interval=50, min_at_risk=20):
-    hazard_all = get_all_participant_hazards(participant_bp_intervals, max_interval=50, min_at_risk=20)
+    hazard_all = get_all_participant_hazards(participant_bp_intervals, max_interval=max_interval, min_at_risk=min_at_risk)
     hazard_summary = (
         hazard_all
         .groupby("TR")["hazard"]
@@ -228,7 +356,9 @@ def plot_hazard_summary(participant_bp_intervals, max_interval=50, min_at_risk=2
     )
 
     ax.set_xlabel("k = # of TRs")
-    ax.set_ylabel("probability len(interval) = exactly k TRs \n given len(interval) >= k TRs")
+    ax.set_ylabel("hazard")
+    ax.set_title("hazard = P( length of interval is exactly k TRs | length of interval ≥ k TRs )",
+                 fontsize=9)
     ax.set_ylim(0, 1)
 
     ax.legend()
@@ -249,7 +379,9 @@ def plot_participant_contributions(participant_bp_intervals, max_interval=50, mi
     )
 
     ax.set_xlabel("k = # of TRs")
-    ax.set_ylabel("Participants contributing")
+    ax.set_ylabel("# of participants with at least\n20 intervals of length ≥ k TRs")
+    ax.set_axisbelow(True)
+    ax.grid(axis="both", alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(SAVE_PATH / 'hazard_participant_contributions.png', dpi=300)
@@ -305,7 +437,7 @@ def get_participant_balanced_persistence_summary(participant_bp_intervals, futur
     persistence_summary.to_csv(SAVE_PATH / f'persistence_summary_L{future_TRs}.csv', index=False)
     return persistence_summary
 
-def plot_persistence_summary(participant_bp_intervals, plot_future_TRs=[], min_at_risk=20):
+def plot_persistence_summary(participant_bp_intervals, plot_future_TRs=(10,), min_at_risk=20):
     colors = ['green', 'orange'] # add more colors here
     fig, ax = plt.subplots(figsize=(8, 4))
     for future_TRs in plot_future_TRs:
@@ -314,8 +446,8 @@ def plot_persistence_summary(participant_bp_intervals, plot_future_TRs=[], min_a
             persistence_summary["threshold"],
             persistence_summary["median"],
             marker="o",
-            label=f"Median across participants (L={future_TRs})",
-            color=colors[plot_future_TRs.index(future_TRs)]
+            label="Median across participants" if len(plot_future_TRs) == 1 else f"Median across participants (L={future_TRs})",
+            color="orange" if future_TRs == 10 else colors[plot_future_TRs.index(future_TRs) % len(colors)]
         )
 
         ax.fill_between(
@@ -323,12 +455,16 @@ def plot_persistence_summary(participant_bp_intervals, plot_future_TRs=[], min_a
             persistence_summary["q25"],
             persistence_summary["q75"],
             alpha=0.2,
-            color=colors[plot_future_TRs.index(future_TRs)]
+            label="25th–75th percentile",
+            color="orange" if future_TRs == 10 else colors[plot_future_TRs.index(future_TRs) % len(colors)]
         )
     ax.axhline(0.7, linestyle='--', color='grey', linewidth=1, alpha=0.7, label='70% persistence threshold')
     ax.legend(loc='lower right')
     ax.set_xlabel("k = # of TRs")
-    ax.set_ylabel(f"probability interval continues ≥ L TRs \n given len(interval) >= k TRs")
+    ax.set_ylabel("persistence")
+    horizon = str(plot_future_TRs[0]) if len(plot_future_TRs) == 1 else "L"
+    ax.set_title(f"persistence = P( interval continues for ≥ {horizon} TRs | length of interval ≥ k TRs )",
+                 fontsize=9)
     ax.set_ylim(0, 1)
     plt.grid(alpha=0.3)
     plt.tight_layout()
@@ -828,7 +964,7 @@ def print_non_responsive_summary(threshold=20):
     print(f"Total whole-run non-responsive intervals ≥ {threshold} TRs: {total_whole_runs}")
     print(f"Total end non-responsive intervals ≥ {threshold} TRs: {total_end_intervals}")
 
-if __name__ == '__main__':
+if __name__ == '__main__' and not any(flag in sys.argv for flag in ('--plot-bp-intervals', '--plot-hazard-persistence', '--plot-nonresponsive-pooled')):
     scatter_non_responsive_intervals(threshold=20)
     plot_non_responsive_interval_counts(threshold=20)
     print_non_responsive_summary(threshold=20)
@@ -863,3 +999,24 @@ if __name__ == '__main__':
     # plot_total_events_vs_threshold(sensitivity_summary)
     # plot_participant_counts_vs_threshold(sensitivity_summary)
     # plot_run_counts_vs_threshold(sensitivity_summary)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Participant-pooled button-press interval plots")
+    parser.add_argument("--plot-bp-intervals", action="store_true")
+    parser.add_argument("--plot-hazard-persistence", action="store_true")
+    parser.add_argument("--plot-nonresponsive-pooled", action="store_true")
+    parser.add_argument("--bp_TR_snap", choices=("nearest", "preceding"), default="preceding")
+    parser.add_argument("--max-interval", type=int, default=20)
+    args = parser.parse_args()
+    if args.plot_bp_intervals:
+        if args.max_interval < 1:
+            parser.error("--max-interval must be positive")
+        plot_pooled_bp_intervals(args.bp_TR_snap, max_interval=args.max_interval)
+
+    if args.plot_hazard_persistence:
+        plot_hazard_and_persistence(args.bp_TR_snap)
+
+    if args.plot_nonresponsive_pooled:
+        plot_nonresponsive_intervals_pooled(args.bp_TR_snap)
