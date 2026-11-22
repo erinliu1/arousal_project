@@ -13,8 +13,8 @@
 #SBATCH --error=logs/nLOPO_GRU_new_nearest_%A_%a.err
 
 # mkdir -p logs && sbatch sbatch_nested_LOPO_GRU_new.sh
-# 200 tasks: 20 outer participants x 10 seeds. Each writes 21 CSVs (399 fold fits).
-# Fixed HD64, canonical nearest-snapped segments, CPU only, no concurrency cap.
+# 200 tasks: 20 outer participants x 10 seeds. Each adds 6 CSVs (114 fold fits).
+# All ROIs only: HD16/32 x three WDs; existing HD64 results are reused, canonical nearest-snapped segments, CPU only, no concurrency cap.
 set -euo pipefail
 PROJECT_DIR=/orcd/data/ldlewis/001/om/erinliu/Arousal_Project
 PARTICIPANTS=(AAN_01 AAN_02 AAN_03 AAN_04 AAN_05 AAN_06 AAN_07 AAN_08 AAN_09 AAN_10 AAN_11 AAN_12 AAN_14 AAN_15 AAN_16 AAN_17 AAN_18 AAN_19 AAN_20 AAN_21)
@@ -35,4 +35,4 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export MKL_DYNAMIC=FALSE
-python -u nested_LOPO_GRU_new.py --run_inner --outer-held-out-participant "$OUTER" --seed "$SEED"
+python -u nested_LOPO_GRU_new.py --run_inner --outer-held-out-participant "$OUTER" --seed "$SEED" --rois all_rois --hidden-sizes 16 32

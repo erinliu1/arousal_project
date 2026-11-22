@@ -1,4 +1,4 @@
-"""Fixed-HD64 inner LOPO across seven ROI selections, three WDs and ten seeds.
+"""Nearest inner LOPO: HD64 for seven ROI groups; HD16/32/64 for all_rois.
 
 One Slurm task runs one outer participant and seed (21 completed CSVs).
 Nearest-snapped canonical segments; 30 epochs, LR=.001, dropout=.2,
@@ -30,15 +30,17 @@ COLUMNS = ["outer_held_out_participant", "roi", "hidden", "WD", "seed",
            "n_validation_segments", "segment_pooled_balanced_accuracy"]
 
 
-def model_args(roi, wd, seed):
+def model_args(roi, wd, seed, hidden_size=64):
     values = [roi] if isinstance(roi, str) else roi
     rois, label = resolve_rois([token for value in values for token in value.split("+")])
     if label not in ROI_SELECTIONS:
         raise ValueError(f"Expected one of the seven ROI selections; got {roi!r}")
+    if hidden_size not in (16, 32, 64) or (label != "all_rois" and hidden_size != 64):
+        raise ValueError("HD16/32 are supported only for all_rois")
     if wd not in WEIGHT_DECAYS or seed not in SEEDS:
         raise ValueError("Use a canonical weight decay and model seed")
     return training_args(argparse.Namespace(rois=rois, roi_label=label, bp_TR_snap="nearest"),
-                         64, wd, seed)
+                         hidden_size, wd, seed)
 
 
 @lru_cache(maxsize=1)
@@ -61,20 +63,25 @@ def load_data():
     return X, y, metadata
 
 
-def run_inner_lopo(outer_held_out_participant, roi, wd, seed):
+def inner_folder(outer, roi, hidden, wd):
+    base = ROOT / "inner_LOPO" / outer / roi
+    return base / (f"WD={scientific(wd)}" if hidden == 64 else
+                   f"hidden={hidden},WD={scientific(wd)}")
+
+
+def run_inner_lopo(outer_held_out_participant, roi, wd, seed, hidden_size=64):
     """Run 19 inner folds, pool validation predictions, and save exactly one CSV."""
     outer = str(outer_held_out_participant)
     if outer not in PARTICIPANTS:
         raise ValueError(f"Unknown outer participant: {outer}")
-    args = model_args(roi, wd, seed)
-    output = (ROOT / "inner_LOPO" / outer / args.roi_label
-              / f"WD={scientific(wd)}" / f"seed={seed}.csv")
+    args = model_args(roi, wd, seed, hidden_size)
+    output = inner_folder(outer, args.roi_label, hidden_size, wd) / f"seed={seed}.csv"
     if output.is_file() and output.stat().st_size:
         saved = pd.read_csv(output)
         if (list(saved.columns) != COLUMNS or len(saved) != 1
                 or saved.iloc[0]["outer_held_out_participant"] != outer
                 or saved.iloc[0]["roi"] != args.roi_label
-                or saved.iloc[0]["hidden"] != 64 or saved.iloc[0]["WD"] != wd
+                or saved.iloc[0]["hidden"] != hidden_size or saved.iloc[0]["WD"] != wd
                 or saved.iloc[0]["seed"] != seed
                 or not 0 <= saved.iloc[0]["segment_pooled_balanced_accuracy"] <= 1
                 or saved.iloc[0]["n_validation_segments"] <= 0):
@@ -92,7 +99,7 @@ def run_inner_lopo(outer_held_out_participant, roi, wd, seed):
         validation = np.flatnonzero(participants == validation_participant)
         if not len(train) or not len(validation):
             raise ValueError("Empty inner training or validation split")
-        print(f"Outer={outer} | ROI={args.roi_label} | WD={scientific(wd)} | seed={seed} "
+        print(f"Outer={outer} | ROI={args.roi_label} | HD={args.hidden_size} | WD={scientific(wd)} | seed={seed} "
               f"| validation {fold}/19: {validation_participant}", flush=True)
         result, _ = run_fold(dataset, train, validation, participants, args,
                              evaluation_split="validation")
@@ -108,7 +115,7 @@ def run_inner_lopo(outer_held_out_participant, roi, wd, seed):
     labels, predictions = np.concatenate(pooled_labels), np.concatenate(pooled_predictions)
     if set(np.unique(labels)) != {0, 1}:
         raise ValueError("Pooled validation labels must contain both classes")
-    row = dict(outer_held_out_participant=outer, roi=args.roi_label, hidden=64,
+    row = dict(outer_held_out_participant=outer, roi=args.roi_label, hidden=hidden_size,
                WD=wd, seed=seed, n_validation_segments=len(labels),
                segment_pooled_balanced_accuracy=balanced_accuracy_score(labels, predictions))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +130,51 @@ def run_outer_participant_seed(outer_held_out_participant, seed):
     """Run seven ROI selections by three WDs for one outer participant/seed."""
     return [run_inner_lopo(outer_held_out_participant, roi, wd, seed)
             for roi in ROI_SELECTIONS for wd in WEIGHT_DECAYS]
+
+
+def get_best_all_rois_config():
+    """Rank all nine HD x WD configurations without changing legacy/pruning rankings."""
+    rankings = {}
+    for outer in PARTICIPANTS:
+        rows, counts = [], set()
+        for hidden in (16, 32, 64):
+            for wd in WEIGHT_DECAYS:
+                scores = []
+                for seed in SEEDS:
+                    path = inner_folder(outer, "all_rois", hidden, wd) / f"seed={seed}.csv"
+                    frame = pd.read_csv(path)
+                    if list(frame.columns) != COLUMNS or len(frame) != 1:
+                        raise ValueError(f"Invalid result schema: {path}")
+                    row = frame.iloc[0]
+                    count = float(row.n_validation_segments)
+                    score = float(row.segment_pooled_balanced_accuracy)
+                    if (row.outer_held_out_participant != outer or row.roi != "all_rois"
+                            or row.hidden != hidden or row.WD != wd or row.seed != seed
+                            or not np.isfinite(score) or not 0 <= score <= 1
+                            or not np.isfinite(count) or count <= 0 or not count.is_integer()):
+                        raise ValueError(f"Invalid result identifiers or metrics: {path}")
+                    scores.append(score); counts.add(int(count))
+                rows.append(dict(outer_held_out_participant=outer, roi="all_rois", hidden=hidden,
+                                 WD=wd, n_seeds=len(SEEDS), n_validation_segments=int(count),
+                                 mean_segment_pooled_balanced_accuracy=float(np.mean(scores))))
+        if len(counts) != 1:
+            raise ValueError(f"Validation counts differ for {outer}")
+        ranking = pd.DataFrame(rows).sort_values(
+            ["mean_segment_pooled_balanced_accuracy", "hidden", "WD"],
+            ascending=[False, True, True]).reset_index(drop=True)
+        ranking.insert(0, "rank", np.arange(1,10))
+        rankings[outer] = ranking
+    for outer, ranking in rankings.items():
+        path = ROOT / "inner_LOPO" / outer / "all_rois" / "best_configurations.csv"
+        temporary = path.with_suffix(".csv.tmp")
+        ranking.to_csv(temporary, index=False); temporary.replace(path)
+        top = ranking.iloc[0]
+        print(f"{outer}: all_rois HD={top.hidden}, WD={scientific(top.WD)}", flush=True)
+    path = ROOT / "all_rois_best_configurations.csv"
+    temporary = path.with_suffix(".csv.tmp")
+    pd.concat([r.iloc[[0]] for r in rankings.values()], ignore_index=True).to_csv(temporary,index=False)
+    temporary.replace(path)
+    return path
 
 
 def get_best_starting_config():
@@ -202,7 +254,8 @@ def run_evaluation(seed, roi):
     roi_label = model_args(roi, WEIGHT_DECAYS[0], seed).roi_label
     choices = []
     for outer in PARTICIPANTS:
-        path = ROOT / "inner_LOPO" / outer / "best_configurations.csv"
+        path = ROOT / "inner_LOPO" / outer
+        path = path / "all_rois" / "best_configurations.csv" if roi_label == "all_rois" else path / "best_configurations.csv"
         if not path.is_file():
             raise FileNotFoundError(f"Missing ranking: {path}. Run --get_best_starting_config first.")
         ranking = pd.read_csv(path)
@@ -212,15 +265,15 @@ def run_evaluation(seed, roi):
             raise ValueError(f"Invalid ranking schema: {path}")
         candidates = ranking.loc[ranking.roi.eq(roi_label)].copy()
         scores = candidates.mean_segment_pooled_balanced_accuracy
-        if (len(candidates) != len(WEIGHT_DECAYS) or candidates.WD.duplicated().any()
-                or set(candidates.WD) != set(WEIGHT_DECAYS)
+        expected = {(h,w) for h in ((16,32,64) if roi_label == "all_rois" else (64,)) for w in WEIGHT_DECAYS}
+        if (len(candidates) != len(expected) or candidates.duplicated(["hidden", "WD"]).any()
+                or set(zip(candidates.hidden, candidates.WD)) != expected
                 or not candidates.outer_held_out_participant.eq(outer).all()
-                or not candidates.hidden.eq(64).all()
                 or not candidates.n_seeds.eq(len(SEEDS)).all()
                 or not np.isfinite(scores).all() or not scores.between(0, 1).all()):
-            raise ValueError(f"Expected three complete ten-seed WD rankings for {roi_label}: {path}")
-        choice = candidates.sort_values(["mean_segment_pooled_balanced_accuracy", "WD"],
-                                       ascending=[False, True]).iloc[0]
+            raise ValueError(f"Expected complete ten-seed HD/WD rankings for {roi_label}: {path}")
+        choice = candidates.sort_values(["mean_segment_pooled_balanced_accuracy", "hidden", "WD"],
+                                       ascending=[False, True, True]).iloc[0]
         choices.append(choice)
     selected = pd.DataFrame(choices).set_index("outer_held_out_participant")
     X, y, metadata = load_data()
@@ -230,13 +283,13 @@ def run_evaluation(seed, roi):
     rows, fold_rows = [], []
     for fold, outer in enumerate(PARTICIPANTS, start=1):
         choice = selected.loc[outer]
-        args = model_args(choice.roi, float(choice.WD), seed)
+        args = model_args(choice.roi, float(choice.WD), seed, int(choice.hidden))
         columns = [all_rois.index(roi) for roi in args.rois]
         dataset = ArousalDataset(X[:, :, columns], y)
         train = np.flatnonzero(participants != outer)
         test = np.flatnonzero(participants == outer)
         print(f"Outer seed={seed} | fold {fold}/{len(PARTICIPANTS)} | held out={outer} | "
-              f"ROI={args.roi_label} | WD={scientific(args.weight_decay)}", flush=True)
+              f"ROI={args.roi_label} | HD={args.hidden_size} | WD={scientific(args.weight_decay)}", flush=True)
         result, _ = run_fold(dataset, train, test, participants, args, evaluation_split="test")
         predicted = np.asarray(result["predictions"])
         probabilities = np.asarray(result["probabilities"])
@@ -247,7 +300,7 @@ def run_evaluation(seed, roi):
             raise ValueError(f"Invalid held-out predictions for {outer}")
         fold_rows.append({
             "fold": fold, "outer_held_out_participant": outer,
-            "roi": args.roi_label, "hidden": 64, "WD": args.weight_decay,
+            "roi": args.roi_label, "hidden": args.hidden_size, "WD": args.weight_decay,
             "best_mean_segment_pooled_balanced_accuracy": float(choice.mean_segment_pooled_balanced_accuracy),
             "seed": seed, "n_train_segments": len(train), "n_test_segments": len(test),
             "train_accuracy": float(result["train_accuracy"]),
@@ -258,7 +311,7 @@ def run_evaluation(seed, roi):
         frame["fold"] = fold
         frame["outer_held_out_participant"] = outer
         frame["roi"] = args.roi_label
-        frame["hidden"] = 64
+        frame["hidden"] = args.hidden_size
         frame["WD"] = args.weight_decay
         frame["seed"] = seed
         frame["best_mean_segment_pooled_balanced_accuracy"] = float(choice.mean_segment_pooled_balanced_accuracy)
@@ -354,16 +407,20 @@ def main(argv=None):
     parser.add_argument("--summarize", action="store_true",
                         help="Summarize all ROI groups (or --rois) across ten seeds, including bootstrap CIs")
     parser.add_argument("--eval", action="store_true",
-                        help="Evaluate --rois and --seed using saved participant-specific WD rankings")
+                        help="Evaluate --rois and --seed using saved participant-specific HD/WD rankings")
     parser.add_argument("--get_best_starting_config", action="store_true",
                         help="Rank all completed inner configurations for every participant; no training")
     parser.add_argument("--outer-held-out-participant", choices=PARTICIPANTS)
     parser.add_argument("--seed", type=int, choices=SEEDS)
     parser.add_argument("--rois", nargs="+", help="ROI groups, e.g. thalamic_rois cortical_rois; required for --eval")
+    parser.add_argument("--hidden-sizes", nargs="+", type=int, choices=(16,32,64), default=None,
+                        help="Inner training HD list; defaults to 64. HD16/32 require --rois all_rois")
     parser.add_argument("--weight-decay", type=float, choices=WEIGHT_DECAYS)
     args = parser.parse_args(argv)
     if sum((args.run_inner, args.eval, args.get_best_starting_config, args.summarize)) > 1:
         parser.error("Choose only one of --run_inner, --eval, --summarize, or --get_best_starting_config")
+    if args.hidden_sizes is not None and not args.run_inner:
+        parser.error("--hidden-sizes is only for --run_inner")
     if args.summarize:
         if any(value is not None for value in (args.seed, args.outer_held_out_participant, args.weight_decay)):
             parser.error("--summarize accepts only the optional --rois filter")
@@ -372,7 +429,7 @@ def main(argv=None):
         if args.seed is None or args.rois is None:
             parser.error("--eval requires --rois and --seed")
         if args.outer_held_out_participant is not None or args.weight_decay is not None:
-            parser.error("--eval accepts --rois and --seed; WD is selected from saved rankings")
+            parser.error("--eval accepts --rois and --seed; HD/WD are selected from saved rankings")
         try:
             roi_label = model_args(args.rois, WEIGHT_DECAYS[0], args.seed).roi_label
         except ValueError as error:
@@ -380,19 +437,30 @@ def main(argv=None):
         return run_evaluation(args.seed, roi_label)
     if args.get_best_starting_config:
         if args.run_inner or any(value is not None for value in (
-                args.outer_held_out_participant, args.seed, args.rois, args.weight_decay)):
-            parser.error("--get_best_starting_config runs alone, without training parameters")
+                args.outer_held_out_participant, args.seed, args.weight_decay)):
+            parser.error("--get_best_starting_config accepts only optional --rois all_rois")
+        if args.rois is not None:
+            if model_args(args.rois, WEIGHT_DECAYS[0], SEEDS[0]).roi_label != "all_rois":
+                parser.error("Filtered ranking supports only --rois all_rois")
+            return get_best_all_rois_config()
         return get_best_starting_config()
     if not args.run_inner:
         print("Inner training disabled. Use --run_inner to train, or --eval --seed SEED to evaluate, or --get_best_starting_config to rank.")
         return
     if args.outer_held_out_participant is None or args.seed is None:
         parser.error("--run_inner requires --outer-held-out-participant and --seed")
-    if (args.rois is None) != (args.weight_decay is None):
-        parser.error("Use --rois and --weight-decay together, or omit both for all 21 configurations")
     if args.rois is None:
+        if args.weight_decay is not None or args.hidden_sizes is not None:
+            parser.error("--weight-decay/--hidden-sizes require --rois")
         return run_outer_participant_seed(args.outer_held_out_participant, args.seed)
-    return run_inner_lopo(args.outer_held_out_participant, args.rois, args.weight_decay, args.seed)
+    roi = model_args(args.rois, WEIGHT_DECAYS[0], args.seed).roi_label
+    hidden_sizes = args.hidden_sizes or [64]
+    if roi != "all_rois" and hidden_sizes != [64]:
+        parser.error("HD16/32 are supported only for --rois all_rois")
+    return [run_inner_lopo(args.outer_held_out_participant, roi, wd, args.seed, hidden)
+            for hidden in dict.fromkeys(hidden_sizes)
+            for wd in (WEIGHT_DECAYS if args.weight_decay is None else [args.weight_decay])]
+
 
 
 if __name__ == "__main__":
