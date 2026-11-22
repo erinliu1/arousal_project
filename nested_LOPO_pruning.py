@@ -7,6 +7,7 @@ when that row's ROI selection differs from the 31-ROI starting selection.
 All scores pool segment predictions across 19 inner validation participants.
 """
 import argparse
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -27,9 +28,20 @@ COLUMNS = ["outer_held_out_participant", "baseline_roi", "excluded_roi", "hidden
 
 def atomic_csv(frame, path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".csv.tmp")
-    frame.to_csv(temporary, index=False)
-    temporary.replace(path)
+    # Concurrent seeds can recompute the same previous-round averages.
+    # Unique temporary files let each identical result be replaced atomically.
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv.tmp", dir=path.parent,
+                                     delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            frame.to_csv(handle, index=False)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def round_dir(outer, number):
