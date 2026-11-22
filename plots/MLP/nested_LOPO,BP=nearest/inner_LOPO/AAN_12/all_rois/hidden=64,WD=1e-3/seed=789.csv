@@ -1,0 +1,2 @@
+outer_held_out_participant,roi,hidden,WD,seed,n_validation_segments,segment_pooled_balanced_accuracy
+AAN_12,all_rois,64,0.001,789,2233,0.7090971968672382
