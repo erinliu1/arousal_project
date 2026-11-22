@@ -3,7 +3,17 @@
 Examples (run in the same environment as GRU.py):
     python motion_classifier.py --run-training
     python motion_classifier.py --run-training --analysis loro --segment-length 50 --segment-stride 50
+    python motion_classifier.py --summarize-legacy
+    python motion_classifier.py --run_inner --outer-held-out-participant AAN_01
+    python motion_classifier.py --get_best_starting_config
+    python motion_classifier.py --eval
     python motion_classifier.py --summarize
+
+Nested modes use canonical nearest-snapped 40-TR segments and the existing five
+FD features. Tune C=0.001/0.01/0.1/1/10 using pooled 19-fold inner BA for each
+outer participant. There are no model seeds. Outputs go under
+plots/motion_classifier/nested_LOPO,BP=nearest/. Summary reports model metrics
+and participant-bootstrap 95% CIs; no seed mean or STD is computed.
 
 Default: trim disabled, 40-TR segments/stride, LOPO, fixed C=0.01.
 Only segment metadata and fd.npy are loaded; ROI arrays are not needed.
@@ -47,9 +57,11 @@ def parse_args():
         "--responsive-window-size", "--responsive-window-stride",
         "--responsive-min-bp-trs", "--responsive-max-bp-gap",
         "--trim-responsive-intervals", "--nonresponsive-min-gap",
-        "--rebuild-segment-arrays", "--summarize",
+        "--bp_TR_snap", "--rebuild-segment-arrays", "--summarize",
     ):
         options = ARGUMENT_SPECS[flag].copy()
+        if flag == "--summarize":
+            options["help"] = "Summarize deterministic nested evaluation and bootstrap participants."
         if flag == "--rebuild-segment-arrays":
             options["help"] = "Rebuild shared segment metadata before extracting motion features."
         parser.add_argument(flag, **options)
@@ -61,7 +73,12 @@ def parse_args():
                         help="Threshold for the fraction-above-threshold feature; not motion exclusion.")
     parser.add_argument("--plot", action="store_true",
                         help="Save the fold-recall plot after training, or plot existing results.")
+    from deterministic_nested_lopo import add_arguments, validate_arguments
+    add_arguments(parser)
     args = parser.parse_args()
+    validate_arguments(parser, args)
+    if args.run_training and (args.run_inner or args.eval or args.get_best_starting_config or args.summarize):
+        parser.error("Use --run-training for legacy runs only")
     if args.segment_length < 1 or args.segment_stride < 1 or args.max_iter < 1:
         parser.error("Segment length, stride, and max-iter must be positive.")
     if not np.isfinite(args.c) or args.c <= 0:
@@ -246,9 +263,23 @@ def summarize():
     print(f"Saved {len(rows)} results to {output}")
 
 
+def nested_runner(args):
+    from deterministic_nested_lopo import NestedLOPO
+    root = CLASSIFIER_DIR / "nested_LOPO,BP=nearest"
+    if args.fd_threshold != FD_THRESHOLD:
+        root = root / f"FD={args.fd_threshold:g}"
+    return NestedLOPO(root, "motion", args, load_segments, run_fold)
+
+
 def main():
     args = parse_args()
-    if args.summarize:
+    if args.run_inner or args.eval or args.get_best_starting_config or args.summarize:
+        runner = nested_runner(args)
+        if args.run_inner: return runner.run_inner(args.outer_held_out_participant)
+        if args.summarize: return runner.summarize()
+        if args.eval: return runner.evaluate()
+        return runner.select()
+    if args.summarize_legacy:
         summarize()
     elif args.run_training:
         run_analysis(args)

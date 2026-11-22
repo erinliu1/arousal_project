@@ -68,6 +68,9 @@ def load_predictions(config_folder, analysis):
     direct_path = config_folder / f"{analysis.lower()}_predictions.csv"
     if not nested_paths and direct_path.exists():
         paths.append(direct_path)
+    deterministic_path = config_folder / "predictions.csv"
+    if not nested_paths and deterministic_path.exists() and not paths:
+        paths.append(deterministic_path)
     results_path = config_folder / "results.csv"
     if not nested_paths and results_path.exists():
         paths.append(results_path)
@@ -109,6 +112,12 @@ def bootstrap_output_path(config_folder, prediction_paths):
             and path.parent.parent.name == "outer_LOPO"
             for path in prediction_paths):
         evaluation_dir = prediction_paths[0].parent.parent.parent / "evaluation"
+        evaluation_dir.mkdir(parents=True, exist_ok=True)
+        return evaluation_dir / "bootstrap_ci.csv"
+    if (len(prediction_paths) == 1 and prediction_paths[0].name == "predictions.csv"
+            and prediction_paths[0].parent.parent.name == "outer_LOPO"):
+        folder = prediction_paths[0].parent
+        evaluation_dir = folder.parent.parent / "evaluation" / folder.name
         evaluation_dir.mkdir(parents=True, exist_ok=True)
         return evaluation_dir / "bootstrap_ci.csv"
     return config_folder / "bootstrap_ci.csv"
@@ -198,9 +207,12 @@ def main(argv=None):
     samples, sample_path = load_or_create_samples(participants, args.n_bootstrap, args.bootstrap_seed)
     metrics = bootstrap_metrics(predictions, participants, samples)
     intervals = {name: np.percentile(values, [2.5, 97.5]) for name, values in metrics.items()}
+    deterministic_nested = (len(paths) == 1 and paths[0].name == "predictions.csv"
+                            and paths[0].parent.parent.name == "outer_LOPO")
+    model_count_key = "n_prediction_sets" if deterministic_nested else "n_model_seeds"
     result = pd.DataFrame([{
         "n_bootstrap": args.n_bootstrap, "bootstrap_seed": args.bootstrap_seed,
-        "n_participants": len(participants), "n_model_seeds": len(predictions),
+        "n_participants": len(participants), model_count_key: len(predictions),
         "bootstrap_mean_spba": metrics["spba"].mean(),
         "ci_2.5": intervals["spba"][0], "ci_97.5": intervals["spba"][1],
         "bootstrap_mean_responsive_recall": metrics["responsive_recall"].mean(),
@@ -213,7 +225,8 @@ def main(argv=None):
     output_path = bootstrap_output_path(config_folder, paths)
     result.to_csv(output_path, index=False)
     print(result.to_string(index=False))
-    print(f"Predictions: {len(paths)} seeds\nSamples: {sample_path}\nSaved: {output_path}")
+    unit = "deterministic prediction set" if deterministic_nested else "seeds"
+    print(f"Predictions: {len(paths)} {unit}\nSamples: {sample_path}\nSaved: {output_path}")
 
 
 if __name__ == "__main__":
