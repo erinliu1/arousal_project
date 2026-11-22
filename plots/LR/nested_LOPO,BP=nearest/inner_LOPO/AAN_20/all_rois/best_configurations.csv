@@ -1,0 +1,6 @@
+rank,outer_held_out_participant,roi,C,n_validation_segments,segment_pooled_balanced_accuracy
+1,AAN_20,all_rois,0.01,2466,0.6876779923302172
+2,AAN_20,all_rois,0.1,2466,0.6654263144396686
+3,AAN_20,all_rois,0.001,2466,0.6524160083782367
+4,AAN_20,all_rois,1.0,2466,0.6501540451843553
+5,AAN_20,all_rois,10.0,2466,0.647347684099229

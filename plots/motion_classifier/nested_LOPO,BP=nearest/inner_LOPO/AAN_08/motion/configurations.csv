@@ -1,0 +1,6 @@
+outer_held_out_participant,roi,C,n_validation_segments,segment_pooled_balanced_accuracy
+AAN_08,motion,0.001,2104,0.5962042428908625
+AAN_08,motion,0.01,2104,0.6326535960470051
+AAN_08,motion,0.1,2104,0.6267860951162294
+AAN_08,motion,1.0,2104,0.623635013067005
+AAN_08,motion,10.0,2104,0.6237163429736383

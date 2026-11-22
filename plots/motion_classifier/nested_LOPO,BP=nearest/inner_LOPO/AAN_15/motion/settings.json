@@ -1,0 +1,14 @@
+{
+  "BP": "nearest",
+  "c_grid": [
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    10.0
+  ],
+  "fd_threshold": 0.25,
+  "features": "fd_summaries",
+  "max_iter": 5000,
+  "roi": "motion"
+}
