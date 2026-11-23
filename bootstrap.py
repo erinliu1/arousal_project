@@ -24,14 +24,14 @@ def return_config_folder(rois="all_rois", W=30, S=1, N_min=8, G_max=4, T_min=20,
     trim_suffix = (",trim" if trim else "") + (",BP=nearest" if BP == "nearest" else "")
     segment = f"R(W={W},S={S},N_min={N_min},G_max={G_max}):NR(T_min={T_min}):Segment(TR={TR},SW={SW}{trim_suffix})"
     analysis_dir = analysis.upper()
-    if model == "GRU":
+    if model in ("GRU", "GRU_time_shuffle"):
         model_dir = (f"model=GRU,pool={pool},hidden={hidden},drop={drop},epochs={epochs},"
                      f"batch={batch},LR={format_rate(LR)},WD={format_rate(WD)}")
         if innerCV > 0:
             analysis_dir += f",innerCV={innerCV}"
         if balance == "class":
             analysis_dir += ",balance=class"
-        return PROJECT_DIR / "plots" / "GRU" / "segments" / segment / rois / model_dir / analysis_dir
+        return PROJECT_DIR / "plots" / model / "segments" / segment / rois / model_dir / analysis_dir
     if model == "MLP":
         model_dir = (f"model=MLP,hidden={hidden},drop={drop:g},epochs={epochs},batch={batch},"
                      f"LR={LR:g},WD={WD:g}")

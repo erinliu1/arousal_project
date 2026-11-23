@@ -25,6 +25,8 @@ COLUMNS = ["outer_held_out_participant", "roi", "hidden", "WD", "seed",
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run_fixed", action="store_true", help="Fixed HD32/WD0.01 segment sweep on the original preceding cohort")
+    parser.add_argument("--segment-length", type=int, choices=(10,20,30,40,50,60), default=40)
     parser.add_argument("--summarize", action="store_true", help="Summarize all ten outer-evaluation seeds and bootstrap participants")
     parser.add_argument("--get_best_starting_config", action="store_true")
     parser.add_argument("--eval", action="store_true", help="Run outer LOPO using saved best configurations")
@@ -33,6 +35,8 @@ def parse_args():
     parser.add_argument("--seed", type=int, choices=SEEDS,
                         help="Generate one seed only; default generates all ten seeds.")
     args = parser.parse_args()
+    if args.run_fixed and (args.run_inner or args.eval or args.get_best_starting_config or args.summarize or args.seed is None):
+        parser.error("--run_fixed requires --seed and cannot be combined with other modes")
     if args.summarize and (args.run_inner or args.eval or args.get_best_starting_config or args.seed is not None):
         parser.error("--summarize is a standalone mode")
     if args.run_inner and (args.eval or args.get_best_starting_config):
@@ -44,6 +48,60 @@ def parse_args():
     if not args.run_inner and args.outer_held_out_participant is not None:
         parser.error("--outer-held-out-participant requires --run_inner")
     return args
+
+
+def run_fixed_segment_sweep(seed, segment_length):
+    """Fixed all-ROI outer LOPO on the existing preceding segment-length cohort."""
+    from all_rois import all_rois
+    from GRU import load_segments
+    from bootstrap import return_config_folder
+    if seed not in SEEDS or segment_length not in (10,20,30,40,50,60):
+        raise ValueError("Use a canonical seed and sweep segment length")
+    args = gru_training_args(argparse.Namespace(rois=list(all_rois), roi_label="all_rois",
+                                               bp_TR_snap="preceding"),32,.01,seed)
+    args.segment_length = args.segment_stride = segment_length
+    X,y,metadata = load_segments(args)
+    metadata = metadata.reset_index(drop=True)
+    y = np.asarray(y,dtype=int)
+    participants = metadata.participant.astype(str).to_numpy()
+    if (X.shape != (len(metadata),segment_length,42) or len(y) != len(metadata)
+            or set(participants) != set(PARTICIPANTS)
+            or not np.array_equal(y,metadata.label.map({"responsive":0,"non-responsive":1}))):
+        raise ValueError("Expected aligned original-cohort segment arrays")
+    permutations = np.argsort(np.random.default_rng(seed).random((len(X),segment_length)),axis=1)
+    dataset = ArousalDataset(np.take_along_axis(X,permutations[:,:,None],axis=1),y)
+    frames,folds = [],[]
+    for fold,outer in enumerate(PARTICIPANTS,1):
+        train,test = np.flatnonzero(participants != outer),np.flatnonzero(participants == outer)
+        print(f"Fixed shuffled LOPO | TR={segment_length} | seed={seed} | outer={outer}",flush=True)
+        result,_ = run_fold(dataset,train,test,participants,args,evaluation_split="test")
+        pred,prob = np.asarray(result["predictions"]),np.asarray(result["probabilities"])
+        if (pred.shape != y[test].shape or prob.shape != y[test].shape
+                or not np.isin(pred,[0,1]).all() or not np.isfinite(prob).all()
+                or not ((prob>=0)&(prob<=1)).all()):
+            raise ValueError("Invalid outer predictions")
+        frame=metadata.iloc[test].copy()
+        frame["segment_index"],frame["fold"],frame["seed"]=test,fold,seed
+        frame["outer_held_out_participant"]=outer
+        frame["label_binary"],frame["prediction"],frame["probability_nonresponsive"]=y[test],pred,prob
+        frames.append(frame)
+        folds.append(dict(fold=fold,outer_held_out_participant=outer,hidden=32,WD=.01,seed=seed,
+                          n_train_segments=len(train),n_test_segments=len(test),
+                          train_accuracy=result["train_accuracy"],**fold_metrics(y[test],pred)))
+    predictions=pd.concat(frames).sort_values("segment_index").reset_index(drop=True)
+    if predictions.segment_index.tolist()!=list(range(len(y))):
+        raise ValueError("Outer prediction coverage mismatch")
+    output=return_config_folder(model="GRU_time_shuffle",TR=segment_length,SW=segment_length,
+                               hidden=32,WD=.01,epochs=30)/f"SEED={seed}"
+    output.mkdir(parents=True,exist_ok=True)
+    settings={**vars(args),"model":"GRU_time_shuffle","shuffle_seed":seed,
+              "shuffle":"independent per segment; shared across ROI columns; fixed across folds"}
+    (output/"settings.json").write_text(json.dumps(settings,indent=2)+"\n")
+    for name,frame in (("lopo_predictions.csv",predictions),("lopo_fold_results.csv",pd.DataFrame(folds))):
+        temporary=output/(name+".tmp")
+        frame.to_csv(temporary,index=False);temporary.replace(output/name)
+    print(f"Saved {output}",flush=True)
+    return output
 
 
 def generate(seed):
@@ -359,7 +417,9 @@ def summarize_outer():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.summarize:
+    if args.run_fixed:
+        run_fixed_segment_sweep(args.seed,args.segment_length)
+    elif args.summarize:
         summarize_outer()
     elif args.run_inner:
         run_outer_participant_seed(args.outer_held_out_participant, args.seed)

@@ -1,12 +1,12 @@
 """Collect the all-ROI LOPO segment-length sweep and bootstrap intervals."""
 
+import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 
 from bootstrap import load_predictions, return_config_folder
 
@@ -17,15 +17,17 @@ LENGTHS = range(10, 61, 10)
 MODELS = {
     "GRU": {"configuration": "H64, WD=0.01, dropout=0.2", "hidden": 64, "WD": 1e-2,
             "LR": 1e-3, "drop": 0.2, "epochs": 30, "batch": 32, "pool": "final"},
+    "GRU_time_shuffle": {"configuration": "H32, WD=0.01, dropout=0.2", "hidden":32, "WD":1e-2,
+                         "LR":1e-3, "drop":0.2, "epochs":30, "batch":32, "pool":"final"},
     "MLP": {"configuration": "H16, WD=0.01, dropout=0.2", "hidden": 16, "WD": 1e-2,
             "LR": 1e-3, "drop": 0.2, "epochs": 10, "batch": 32},
     "LR": {"configuration": "C=0.01", "C": 0.01},
     "motion_LR": {"configuration": "C=0.01, FD=0.25", "C": 0.01, "FD": 0.25},
 }
-COLORS = {"GRU": "tab:green", "MLP": "tab:blue", "LR": "tab:purple", "motion_LR": "tab:orange"}
-LABELS = {"GRU": "GRU", "MLP": "MLP", "LR": "LR", "motion_LR": "Motion-only LR"}
+COLORS = {"GRU": "tab:green", "GRU_time_shuffle":"tab:blue", "MLP": "tab:blue", "LR": "tab:purple", "motion_LR": "tab:orange"}
+LABELS = {"GRU": "GRU", "GRU_time_shuffle":"GRU (time\nshuffled)", "MLP": "MLP", "LR": "LR (temporal\nsummaries)", "motion_LR": "LR (motion\nonly)"}
 METRICS = {
-    "segment_pooled_balanced_accuracy": "Segment-Pooled Balanced Accuracy",
+    "segment_pooled_balanced_accuracy": "Balanced Accuracy",
     "responsive_recall": "Responsive Recall",
     "nonresponsive_recall": "Nonresponsive Recall",
 }
@@ -79,8 +81,47 @@ def collect():
     return pd.DataFrame(rows)
 
 
+def add_time_shuffled_results(results):
+    """Append shuffled results while preserving every original sweep row and cohort."""
+    from bootstrap import main as run_bootstrap
+    from nested_LOPO_GRU import SEEDS
+    rows=[]
+    for length in LENGTHS:
+        folder=return_config_folder(model="GRU_time_shuffle",TR=length,SW=length,hidden=32,WD=.01,epochs=30)
+        paths=list(folder.glob("SEED=*/lopo_predictions.csv"))
+        if {int(p.parent.name.removeprefix("SEED=")) for p in paths} != set(SEEDS) or len(paths)!=10:
+            raise ValueError(f"Require all ten shuffled seeds: {folder}")
+        predictions,_,_=load_predictions(folder,"lopo")
+        reference=None
+        for frame in predictions:
+            identity=frame.set_index(["participant","run","segment_start_TR","segment_end_TR_exclusive"]).label_binary.sort_index()
+            if not identity.index.is_unique or (reference is not None and not identity.equals(reference)):
+                raise ValueError(f"Shuffled segment identities differ across seeds: {folder}")
+            reference=identity
+        # Check exact identity against the original ordered GRU cohort.
+        ordered=return_config_folder(model="GRU",TR=length,SW=length,hidden=64,WD=.01,epochs=30)
+        originals,_,_=load_predictions(ordered,"lopo")
+        original=originals[0].set_index(["participant","run","segment_start_TR","segment_end_TR_exclusive"]).label_binary.sort_index()
+        if not reference.equals(original):
+            raise ValueError(f"Shuffled cohort differs from the original sweep: TR={length}")
+        run_bootstrap(["--predictions-folder",str(folder)])
+        ci=pd.read_csv(folder/"bootstrap_ci.csv").iloc[0]
+        existing=results.loc[(results.model=="GRU") & (results.segment_length==length)]
+        if len(existing)!=1:raise ValueError("Expected one original GRU sweep row per length")
+        row=existing.iloc[0].to_dict()
+        row.update(model="GRU_time_shuffle",configuration="H32, WD=0.01, dropout=0.2",n_model_runs=10,
+                   **pd.DataFrame([prediction_metrics(f) for f in predictions]).mean().to_dict())
+        for metric,prefix in (("segment_pooled_balanced_accuracy",""),("responsive_recall","responsive_recall_"),("nonresponsive_recall","nonresponsive_recall_")):
+            for percentile in ("2.5","97.5"):
+                row[f"{metric}_ci_{percentile}"]=ci[f"{prefix}ci_{percentile}"]
+        row.update(n_bootstrap=int(ci.n_bootstrap),bootstrap_seed=int(ci.bootstrap_seed))
+        rows.append(row)
+    return pd.concat([results.loc[results.model!="GRU_time_shuffle"],pd.DataFrame(rows)],ignore_index=True)
+
+
 def plot_results(results):
     """Plot LOPO means and participant-clustered 95% intervals by segment length."""
+    plotted_models = tuple(model for model in MODELS if model != "MLP" and model in set(results.model))
     with plt.rc_context({"font.size": 18, "axes.labelsize": 20, "xtick.labelsize": 16,
                          "ytick.labelsize": 16, "axes.linewidth": 1.4,
                          "xtick.major.width": 1.4, "ytick.major.width": 1.4}):
@@ -88,7 +129,7 @@ def plot_results(results):
         fig.subplots_adjust(left=0.12, right=0.68, bottom=0.08, top=0.96, hspace=0.18)
         for row, (metric, title) in enumerate(METRICS.items()):
             ax = axes[row]
-            for model in MODELS:
+            for model in plotted_models:
                 selected = results.loc[results["model"].eq(model)].sort_values("segment_length")
                 lengths, means = selected["segment_length"].to_numpy(), selected[metric].to_numpy()
                 lower = selected[f"{metric}_ci_2.5"].to_numpy()
@@ -124,9 +165,7 @@ def plot_results(results):
         for ax in axes[:-1]:
             ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
         handles = [Line2D([], [], color=COLORS[model], linewidth=4, marker="o", markersize=6,
-                          label=LABELS[model]) for model in MODELS]
-        handles.append(Patch(facecolor="0.55", alpha=0.3, linewidth=0,
-                             label="95% participant-\nclustered CI"))
+                          label=LABELS[model]) for model in plotted_models]
         fig.legend(handles=handles, loc="center left", bbox_to_anchor=(0.71, 0.5),
                    fontsize=16, handlelength=1.8, labelspacing=1.0, frameon=True,
                    facecolor="white", edgecolor="0.8", framealpha=1, borderpad=0.8)
@@ -134,13 +173,21 @@ def plot_results(results):
 
 
 def main():
-    results = collect()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--plot-only", action="store_true", help="Plot the saved sweep CSV without recollecting results")
+    parser.add_argument("--add-time-shuffled", action="store_true", help="Bootstrap completed shuffled runs and add them to the saved sweep")
+    args = parser.parse_args()
+    results = pd.read_csv(OUTPUT) if args.plot_only or args.add_time_shuffled else collect()
+    if args.add_time_shuffled:
+        results=add_time_shuffled_results(results)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    results.to_csv(OUTPUT, index=False)
+    if not args.plot_only or args.add_time_shuffled:
+        results.to_csv(OUTPUT, index=False)
     figure, _ = plot_results(results)
     figure.savefig(FIGURE_OUTPUT, dpi=250)
     plt.close(figure)
-    print(f"Saved {len(results)} configurations to {OUTPUT}")
+    if not args.plot_only or args.add_time_shuffled:
+        print(f"Saved {len(results)} configurations to {OUTPUT}")
     print(f"Saved {FIGURE_OUTPUT}")
 
 
