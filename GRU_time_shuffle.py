@@ -10,7 +10,7 @@ import pandas as pd
 
 from sklearn.metrics import balanced_accuracy_score
 from GRU import ArousalDataset, run_fold, get_segment_dir_name
-from nested_LOPO_GRU import SEEDS, scientific, fold_metrics, training_args as gru_training_args
+from nested_LOPO_GRU_old import SEEDS, scientific, fold_metrics, training_args as gru_training_args
 from nested_LOPO_GRU_new import load_data as load_nearest_data, PARTICIPANTS
 
 

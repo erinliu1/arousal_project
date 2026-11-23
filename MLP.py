@@ -42,7 +42,7 @@ from GRU import (
     ARGUMENT_SPECS, ParticipantClassBalancedSampler,
     get_folds, get_segment_dir_name, load_segments, resolve_rois, set_seed,
 )
-from nested_LOPO_GRU import SEEDS, scientific, training_args as gru_training_args, fold_metrics
+from nested_LOPO_GRU_old import SEEDS, scientific, training_args as gru_training_args, fold_metrics
 from nested_LOPO_GRU_new import load_data as load_nearest_data, PARTICIPANTS
 from scatterplots import visualize_leave_one_out, plot_training_history
 

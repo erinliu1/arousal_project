@@ -84,7 +84,7 @@ def collect():
 def add_time_shuffled_results(results):
     """Append shuffled results while preserving every original sweep row and cohort."""
     from bootstrap import main as run_bootstrap
-    from nested_LOPO_GRU import SEEDS
+    from nested_LOPO_GRU_old import SEEDS
     rows=[]
     for length in LENGTHS:
         folder=return_config_folder(model="GRU_time_shuffle",TR=length,SW=length,hidden=32,WD=.01,epochs=30)

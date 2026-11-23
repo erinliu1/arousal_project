@@ -1,4 +1,4 @@
-"""Nearest inner LOPO: HD64 for seven ROI groups; HD16/32/64 for all_rois and cortical+thalamic.
+"""Nearest inner LOPO: HD16/32/64 across all seven ROI groups.
 
 One Slurm task runs one outer participant and seed (21 completed CSVs).
 Nearest-snapped canonical segments; 30 epochs, LR=.001, dropout=.2,
@@ -15,7 +15,7 @@ import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
 from GRU import ArousalDataset, get_segment_dir, load_segments, resolve_rois, run_fold
-from nested_LOPO_GRU import SEEDS, scientific, training_args, fold_metrics
+from nested_LOPO_GRU_old import SEEDS, scientific, training_args, fold_metrics
 from all_rois import all_rois
 
 ROOT = Path("plots/GRU/nested_LOPO,BP=nearest")
@@ -30,7 +30,9 @@ COLUMNS = ["outer_held_out_participant", "roi", "hidden", "WD", "seed",
            "n_validation_segments", "segment_pooled_balanced_accuracy"]
 
 
-EXPANDED_ROI_SELECTIONS = ("all_rois", "thalamic_rois+cortical_rois")
+EXPANDED_ROI_SELECTIONS = ROI_SELECTIONS
+REMAINING_ROI_SELECTIONS = tuple(roi for roi in ROI_SELECTIONS
+                                 if roi not in ("all_rois", "thalamic_rois+cortical_rois"))
 
 
 def model_args(roi, wd, seed, hidden_size=64):
@@ -39,7 +41,7 @@ def model_args(roi, wd, seed, hidden_size=64):
     if label not in ROI_SELECTIONS:
         raise ValueError(f"Expected one of the seven ROI selections; got {roi!r}")
     if hidden_size not in (16, 32, 64) or (label not in EXPANDED_ROI_SELECTIONS and hidden_size != 64):
-        raise ValueError("HD16/32 are supported for all_rois and thalamic_rois+cortical_rois")
+        raise ValueError("Hidden size must be 16, 32 or 64")
     if wd not in WEIGHT_DECAYS or seed not in SEEDS:
         raise ValueError("Use a canonical weight decay and model seed")
     return training_args(argparse.Namespace(rois=rois, roi_label=label, bp_TR_snap="nearest"),
@@ -68,8 +70,7 @@ def load_data():
 
 def inner_folder(outer, roi, hidden, wd):
     base = ROOT / "inner_LOPO" / outer / roi
-    return base / (f"WD={scientific(wd)}" if hidden == 64 else
-                   f"hidden={hidden},WD={scientific(wd)}")
+    return base / f"hidden={hidden},WD={scientific(wd)}"
 
 
 def run_inner_lopo(outer_held_out_participant, roi, wd, seed, hidden_size=64):
@@ -135,11 +136,19 @@ def run_outer_participant_seed(outer_held_out_participant, seed):
             for roi in ROI_SELECTIONS for wd in WEIGHT_DECAYS]
 
 
+def run_remaining_roi_groups(outer_held_out_participant, seed, hidden_sizes=(16,32)):
+    """One array task: five remaining groups x six configs x 19 inner folds."""
+    return [run_inner_lopo(outer_held_out_participant, roi, wd, seed, hidden)
+            for roi in REMAINING_ROI_SELECTIONS
+            for hidden in dict.fromkeys(hidden_sizes)
+            for wd in WEIGHT_DECAYS]
+
+
 def get_best_all_rois_config(roi="all_rois"):
     """Rank nine HD/WD configurations for one ROI group; preserve pruning rankings."""
     roi = model_args(roi, WEIGHT_DECAYS[0], SEEDS[0]).roi_label
     if roi not in EXPANDED_ROI_SELECTIONS:
-        raise ValueError("Expanded ranking requires all_rois or thalamic_rois+cortical_rois")
+        raise ValueError("Expected one of the seven canonical ROI groups")
     rankings = {}
     for outer in PARTICIPANTS:
         rows, counts = [], set()
@@ -196,7 +205,7 @@ def get_best_starting_config():
         for roi in ROI_SELECTIONS:
             for wd in WEIGHT_DECAYS:
                 scores, counts = [], []
-                folder = ROOT / "inner_LOPO" / outer / roi / f"WD={scientific(wd)}"
+                folder = inner_folder(outer, roi, 64, wd)
                 for seed in SEEDS:
                     path = folder / f"seed={seed}.csv"
                     if not path.is_file() or not path.stat().st_size:
@@ -240,7 +249,7 @@ def get_best_starting_config():
               f"{len(SEEDS)} seeds", flush=True)
         outputs.append(output)
     combined = pd.concat([ranking.iloc[[0]] for ranking in rankings.values()], ignore_index=True)
-    combined_path = ROOT / "best_configurations.csv"
+    combined_path = ROOT / "overall_best_configuration.csv"
     temporary = combined_path.with_suffix(".csv.tmp")
     combined.to_csv(temporary, index=False)
     temporary.replace(combined_path)
@@ -420,11 +429,15 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, choices=SEEDS)
     parser.add_argument("--rois", nargs="+", help="ROI groups, e.g. thalamic_rois cortical_rois; required for --eval")
     parser.add_argument("--hidden-sizes", nargs="+", type=int, choices=(16,32,64), default=None,
-                        help="Inner training HD list; defaults to 64. HD16/32 support all_rois or thalamic_rois+cortical_rois")
+                        help="Inner training HD list; defaults to 64. HD16/32/64 supported for all seven ROI groups")
+    parser.add_argument("--remaining-roi-groups", action="store_true",
+                        help="Run HD16/32 x all three WDs for the five ROI groups excluding all_rois and cortical+thalamic")
     parser.add_argument("--weight-decay", type=float, choices=WEIGHT_DECAYS)
     args = parser.parse_args(argv)
     if sum((args.run_inner, args.eval, args.get_best_starting_config, args.summarize)) > 1:
         parser.error("Choose only one of --run_inner, --eval, --summarize, or --get_best_starting_config")
+    if args.remaining_roi_groups and (not args.run_inner or args.rois is not None or args.weight_decay is not None):
+        parser.error("--remaining-roi-groups requires --run_inner and cannot use --rois or --weight-decay")
     if args.hidden_sizes is not None and not args.run_inner:
         parser.error("--hidden-sizes is only for --run_inner")
     if args.summarize:
@@ -448,7 +461,7 @@ def main(argv=None):
         if args.rois is not None:
             roi = model_args(args.rois, WEIGHT_DECAYS[0], SEEDS[0]).roi_label
             if roi not in EXPANDED_ROI_SELECTIONS:
-                parser.error("Filtered ranking supports all_rois or thalamic_rois+cortical_rois")
+                parser.error("Filtered ranking requires a canonical ROI group")
             return get_best_all_rois_config(roi)
         return get_best_starting_config()
     if not args.run_inner:
@@ -456,6 +469,8 @@ def main(argv=None):
         return
     if args.outer_held_out_participant is None or args.seed is None:
         parser.error("--run_inner requires --outer-held-out-participant and --seed")
+    if args.remaining_roi_groups:
+        return run_remaining_roi_groups(args.outer_held_out_participant, args.seed, args.hidden_sizes or (16,32))
     if args.rois is None:
         if args.weight_decay is not None or args.hidden_sizes is not None:
             parser.error("--weight-decay/--hidden-sizes require --rois")
@@ -463,7 +478,7 @@ def main(argv=None):
     roi = model_args(args.rois, WEIGHT_DECAYS[0], args.seed).roi_label
     hidden_sizes = args.hidden_sizes or [64]
     if roi not in EXPANDED_ROI_SELECTIONS and hidden_sizes != [64]:
-        parser.error("HD16/32 support all_rois or thalamic_rois+cortical_rois")
+        parser.error("HD16/32/64 supported for all seven ROI groups")
     return [run_inner_lopo(args.outer_held_out_participant, roi, wd, args.seed, hidden)
             for hidden in dict.fromkeys(hidden_sizes)
             for wd in (WEIGHT_DECAYS if args.weight_decay is None else [args.weight_decay])]

@@ -15,7 +15,7 @@ import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
 from GRU import ArousalDataset, resolve_rois, run_fold
-from nested_LOPO_GRU import scientific, training_args
+from nested_LOPO_GRU_old import scientific, training_args
 from nested_LOPO_GRU_new import load_data, SEEDS, PARTICIPANTS, WEIGHT_DECAYS
 
 SOURCE = Path("plots/GRU/nested_LOPO,BP=nearest")
@@ -68,7 +68,7 @@ def selected_wd(outer):
 def initial_baseline(outer, wd):
     scores = {}
     for seed in SEEDS:
-        path = SOURCE / "inner_LOPO" / outer / BASE / f"WD={scientific(wd)}" / f"seed={seed}.csv"
+        path = SOURCE / "inner_LOPO" / outer / BASE / f"hidden=64,WD={scientific(wd)}" / f"seed={seed}.csv"
         frame = pd.read_csv(path)
         if len(frame) != 1:
             raise ValueError(f"Expected one baseline result: {path}")
