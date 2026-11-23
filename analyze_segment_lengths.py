@@ -140,10 +140,20 @@ def plot_results(results):
             panel_title = "Non-responsive Recall" if metric == "nonresponsive_recall" else title
             ax.set_title(panel_title, fontsize=18, pad=7)
             ax.set_ylabel("Balanced Accuracy" if row == 0 else "Recall")
-            ax.set_ylim(0, 1)
-            ax.set_yticks(np.arange(0, 1.01, 0.2))
+
             if row == 0:
+                ax.set_ylabel("Balanced Accuracy")
+                ax.set_ylim(0.4, 0.9)
+                ax.set_yticks(np.arange(0.4, 0.91, 0.2))
                 ax.axhline(0.5, color="0.35", linestyle=":", linewidth=1.8, zorder=0)
+            else:
+                ax.set_ylabel("Recall")
+                if row == 1:
+                    ax.set_ylim(0.4, 1)
+                    ax.set_yticks(np.arange(0.4, 1.01, 0.2))
+                else:
+                    ax.set_ylim(0, 1)
+                    ax.set_yticks(np.arange(0, 1.01, 0.2))
             ax.grid(which="both", alpha=0.22, linewidth=1)
             ax.spines[["top", "right"]].set_visible(False)
 
