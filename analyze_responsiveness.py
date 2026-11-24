@@ -58,6 +58,57 @@ def plot_responsive_intervals_pooled(bp_TR_snap="nearest"):
     return output
 
 
+def plot_responsive_intervals_by_run(bp_TR_snap="nearest"):
+    """Plot canonical responsive intervals separately by run, retaining empty runs."""
+    from GRU import get_run_inventory, save_responsive_windows, save_responsive_intervals
+    suffix = ",BP=nearest" if bp_TR_snap == "nearest" else ""
+    source = Path("plots/GRU/responsiveness") / f"W=30,S=1,N_min=8,G_max=4{suffix}" / "responsive_intervals.csv"
+    if not source.exists():
+        windows, folder = save_responsive_windows(30,1,8,4,bp_TR_snap)
+        save_responsive_intervals(windows,folder,4,bp_TR_snap=bp_TR_snap)
+    intervals = pd.read_csv(source)
+    inventory = get_run_inventory()[["participant", "run"]].copy()
+    inventory["participant_num"] = inventory.participant.str.split("_").str[-1].astype(int)
+    inventory["run_num"] = inventory.run.str.extract(r"(\d+)")[0].astype(int)
+    inventory = inventory.sort_values(["participant_num", "run_num"]).reset_index(drop=True)
+    participants = inventory.participant.drop_duplicates().tolist()
+    colors = dict(zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants)))))
+    fig, ax = plt.subplots(figsize=(20, 6), layout="constrained")
+    centers, labels = [], []
+    for participant, runs in inventory.groupby("participant", sort=False):
+        positions = runs.index.to_numpy()
+        centers.append(positions.mean())
+        labels.append(str(int(participant.split("_")[-1])))
+        for position, row in runs.iterrows():
+            for frame, marker, size in ((intervals, "o", 110),):
+                values = frame.loc[frame.participant.eq(participant) & frame.run.eq(row.run), "duration_TRs"]
+                ax.scatter(np.full(len(values), position), values, marker=marker, s=size,
+                           color=colors[participant], alpha=.7, linewidths=2, zorder=3)
+            if position != positions[-1]:
+                ax.axvline(position + .5, color=".85", linewidth=1.3, zorder=0)
+        if positions[-1] != len(inventory)-1:
+            ax.axvline(positions[-1]+.5, color=".55", linewidth=2.5, zorder=0)
+    ax.set_xticks(centers, labels)
+    ax.set_xlim(-.5, len(inventory)-.5)
+    ax.set_xlabel("Participant", fontsize=30, labelpad=15)
+    ax.set_ylabel("Interval duration (TRs)", fontsize=26, labelpad=15)
+    ax.set_title("Responsive intervals by participant and run", fontsize=34, pad=18)
+    ax.tick_params(axis="both", labelsize=26, width=2.5, length=9)
+    ax.tick_params(axis="x", labelsize=22)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", alpha=.4, linewidth=1.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_linewidth(2.5)
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    destination.mkdir(parents=True, exist_ok=True)
+    output = destination / "responsive_intervals_by_participant_and_run.png"
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+    print(f"Saved {output}: {len(intervals)} responsive intervals, {len(inventory)} run positions")
+    return output
+
+
+
 def get_interval_frequency_distribution(nonresponsive_threshold=20, bp_TR_snap="nearest"):
     """Within-participant frequency conditional on interval length <= threshold.
 
@@ -881,12 +932,15 @@ def plot_responsive_interval_counts(window_size=30, step_size=10, min_density=0.
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--plot-responsive-by-run", action="store_true")
     parser.add_argument("--plot-responsive-pooled", action="store_true")
     parser.add_argument("--plot-interval-frequency", action="store_true")
     parser.add_argument("--plot-interval-quantiles", action="store_true")
     parser.add_argument("--bp_TR_snap", choices=("nearest", "preceding"), default="nearest")
     parser.add_argument("--max-interval", type=int, default=20)
     args = parser.parse_args()
+    if args.plot_responsive_by_run:
+        plot_responsive_intervals_by_run(args.bp_TR_snap)
     if args.plot_responsive_pooled:
         plot_responsive_intervals_pooled(args.bp_TR_snap)
     elif args.plot_interval_frequency:

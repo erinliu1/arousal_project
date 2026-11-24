@@ -58,6 +58,65 @@ def plot_nonresponsive_intervals_pooled(bp_TR_snap="nearest", threshold=20):
     return output
 
 
+def plot_nonresponsive_intervals_by_run(bp_TR_snap="nearest", threshold=20):
+    """Run-separated counterpart of the pooled figure, including end/whole-run gaps."""
+    from GRU import get_run_inventory, save_nonresponsive_intervals
+    from matplotlib.lines import Line2D
+    suffix = ",BP=nearest" if bp_TR_snap == "nearest" else ""
+    source = Path("plots/GRU/non_responsiveness") / f"T_min={threshold}{suffix}"
+    filenames = ("non_responsive_intervals.csv", "non_responsive_end_intervals.csv",
+                 "non_responsive_whole_runs.csv")
+    if any(not (source / name).exists() for name in filenames):
+        save_nonresponsive_intervals(threshold, bp_TR_snap=bp_TR_snap)
+    bounded, ends, whole = [pd.read_csv(source / name) for name in filenames]
+    inventory = get_run_inventory()[["participant", "run"]].copy()
+    inventory["participant_num"] = inventory.participant.str.split("_").str[-1].astype(int)
+    inventory["run_num"] = inventory.run.str.extract(r"(\d+)")[0].astype(int)
+    inventory = inventory.sort_values(["participant_num", "run_num"]).reset_index(drop=True)
+    participants = inventory.participant.drop_duplicates().tolist()
+    colors = dict(zip(participants, plt.cm.tab20(np.linspace(0, 1, len(participants)))))
+    fig, ax = plt.subplots(figsize=(20, 6), layout="constrained")
+    centers, labels = [], []
+    for participant, runs in inventory.groupby("participant", sort=False):
+        positions = runs.index.to_numpy()
+        centers.append(positions.mean())
+        labels.append(str(int(participant.split("_")[-1])))
+        for position, row in runs.iterrows():
+            for frame, marker, size in ((bounded, "o", 110), (ends, "x", 130), (whole, "*", 260)):
+                values = frame.loc[frame.participant.eq(participant) & frame.run.eq(row.run), "duration_TRs"]
+                ax.scatter(np.full(len(values), position), values, marker=marker, s=size,
+                           color=colors[participant], alpha=.7, linewidths=2, zorder=3)
+            if position != positions[-1]:
+                ax.axvline(position + .5, color=".85", linewidth=1.3, zorder=0)
+        if positions[-1] != len(inventory)-1:
+            ax.axvline(positions[-1]+.5, color=".55", linewidth=2.5, zorder=0)
+    ax.set_xticks(centers, labels)
+    ax.set_xlim(-.5, len(inventory)-.5)
+    ax.set_xlabel("Participant", fontsize=30, labelpad=15)
+    ax.set_ylabel("Interval duration (TRs)", fontsize=26, labelpad=15)
+    ax.set_title(f"Non-responsive intervals ≥ {threshold} TRs by participant and run", fontsize=34, pad=18)
+    ax.tick_params(axis="both", labelsize=26, width=2.5, length=9)
+    ax.tick_params(axis="x", labelsize=22)
+    ax.set_axisbelow(True)
+    ax.grid(axis="y", alpha=.4, linewidth=1.8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["left", "bottom"]].set_linewidth(2.5)
+    handles = [Line2D([], [], linestyle="none", marker=m, color=".35", markersize=size,
+                      markeredgewidth=2, label=label)
+               for m,size,label in (("o",9,"Between button presses"),
+                                    ("x",10,"Last press to run end"),
+                                    ("*",14,"No presses (whole run)"))]
+    ax.legend(handles=handles, fontsize=14, loc="upper left", ncol=1, framealpha=.9)
+    destination = Path(f"plots/button_press_analysis,{bp_TR_snap}")
+    destination.mkdir(parents=True, exist_ok=True)
+    output = destination / "nonresponsive_intervals_by_participant_and_run.png"
+    fig.savefig(output, dpi=200)
+    plt.close(fig)
+    print(f"Saved {output}: {len(bounded)} bounded, {len(ends)} end intervals, "
+          f"{len(whole)} whole runs, {len(inventory)} run positions")
+    return output
+
+
 def plot_hazard_and_persistence(bp_TR_snap="nearest"):
     """Regenerate all four summaries from unfiltered within-run BP intervals."""
     global SAVE_PATH
@@ -964,7 +1023,7 @@ def print_non_responsive_summary(threshold=20):
     print(f"Total whole-run non-responsive intervals ≥ {threshold} TRs: {total_whole_runs}")
     print(f"Total end non-responsive intervals ≥ {threshold} TRs: {total_end_intervals}")
 
-if __name__ == '__main__' and not any(flag in sys.argv for flag in ('--plot-bp-intervals', '--plot-hazard-persistence', '--plot-nonresponsive-pooled')):
+if __name__ == '__main__' and not any(flag in sys.argv for flag in ('--plot-bp-intervals', '--plot-hazard-persistence', '--plot-nonresponsive-pooled', '--plot-nonresponsive-by-run')):
     scatter_non_responsive_intervals(threshold=20)
     plot_non_responsive_interval_counts(threshold=20)
     print_non_responsive_summary(threshold=20)
@@ -1006,6 +1065,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Participant-pooled button-press interval plots")
     parser.add_argument("--plot-bp-intervals", action="store_true")
     parser.add_argument("--plot-hazard-persistence", action="store_true")
+    parser.add_argument("--plot-nonresponsive-by-run", action="store_true")
     parser.add_argument("--plot-nonresponsive-pooled", action="store_true")
     parser.add_argument("--bp_TR_snap", choices=("nearest", "preceding"), default="preceding")
     parser.add_argument("--max-interval", type=int, default=20)
@@ -1017,6 +1077,9 @@ if __name__ == "__main__":
 
     if args.plot_hazard_persistence:
         plot_hazard_and_persistence(args.bp_TR_snap)
+
+    if args.plot_nonresponsive_by_run:
+        plot_nonresponsive_intervals_by_run(args.bp_TR_snap)
 
     if args.plot_nonresponsive_pooled:
         plot_nonresponsive_intervals_pooled(args.bp_TR_snap)

@@ -18,7 +18,7 @@ RAW_DATA_DIR = Path("raw_data")
 COLORS = {"responsive": "#59A14F", "non-responsive": "#E15759"}
 NAME_PATTERN = re.compile(
     r"R\(W=(?P<W>\d+),S=(?P<S>\d+),N_min=(?P<N>\d+),G_max=(?P<G>\d+)\):"
-    r"NR\(T_min=(?P<T>\d+)\):Segment\(TR=(?P<TR>\d+),SW=(?P<SW>\d+)(?P<trim>,trim)?\)"
+    r"NR\(T_min=(?P<T>\d+)\):Segment\(TR=(?P<TR>\d+),SW=(?P<SW>\d+)(?P<trim>,trim)?(?:,BP=(?P<BP>nearest|preceding))?\)"
 )
 
 
@@ -51,28 +51,30 @@ def load_inputs(segment_dir):
     if not match:
         raise ValueError(f"Could not parse GRU settings from folder name: {segment_dir.name}")
     settings = match.groupdict()
+    suffix = ",BP=nearest" if settings.get("BP") == "nearest" else ""
     metadata = read_csv(segment_dir / "all_segment_metadata.csv",
                         {"participant", "run", "label", "segment_start_TR", "segment_end_TR_exclusive"})
     response_root = Path("plots/GRU/responsiveness") / (
-        f"W={settings['W']},S={settings['S']},N_min={settings['N']},G_max={settings['G']}")
+        f"W={settings['W']},S={settings['S']},N_min={settings['N']},G_max={settings['G']}" + suffix)
     response_dir = response_root / f"TR={settings['TR']},SW={settings['SW']},trim" if settings["trim"] else response_root
     responsive = read_csv(response_dir / "responsive_intervals.csv", {"participant", "run", "start_TR", "end_TR"})
-    nr_dir = Path("plots/GRU/non_responsiveness") / f"T_min={settings['T']}"
+    nr_dir = Path("plots/GRU/non_responsiveness") / (f"T_min={settings['T']}" + suffix)
     nr_files = ["non_responsive_intervals.csv", "non_responsive_end_intervals.csv", "non_responsive_whole_runs.csv"]
     nonresponsive = pd.concat([read_csv(nr_dir / name, {"participant", "run", "start_TR", "end_TR"})
                                for name in nr_files], ignore_index=True)
     return metadata, responsive, nonresponsive
 
 
-def participant_runs(participant):
+def participant_runs(participant, bp_TR_snap="preceding"):
+    from GRU import load_bp_TRs
     participant_dir = RAW_DATA_DIR / participant
     runs = []
     for run_dir in sorted((path for path in participant_dir.iterdir() if path.is_dir()), key=lambda path: numeric_key(path.name)):
         time_path, bp_path = run_dir / "time_vector.npy", run_dir / "bp_TRs.npy"
-        if time_path.exists() and bp_path.exists():
+        if time_path.exists() and (bp_path.exists() if bp_TR_snap == "preceding" else (run_dir / "bps.npy").exists()):
             time_vector = np.asarray(np.load(time_path), dtype=float)
             n_trs = len(time_vector)
-            presses = np.unique(np.asarray(np.load(bp_path), dtype=int))
+            presses = np.unique(np.asarray(load_bp_TRs(run_dir, bp_TR_snap), dtype=int))
             runs.append((run_dir.name, time_vector, presses[(presses >= 0) & (presses < n_trs)]))
     return runs
 
@@ -142,9 +144,10 @@ def main():
     participants = sorted(metadata["participant"].dropna().astype(str).unique(), key=numeric_key)
     for participant in participants:
         (output_dir / f"{participant}_labels.png").unlink(missing_ok=True)
+    bp_TR_snap = NAME_PATTERN.fullmatch(args.segment_dir.name).groupdict().get("BP") or "preceding"
     outputs = [plot_run(participant, run_data, metadata, responsive, nonresponsive, output_dir,
                         args.pixels_per_tr, args.dpi)
-               for participant in participants for run_data in participant_runs(participant)]
+               for participant in participants for run_data in participant_runs(participant, bp_TR_snap)]
     outputs = [path for path in outputs if path is not None]
     print(f"Wrote {len(outputs)} participant-run PNGs to {output_dir}")
 
