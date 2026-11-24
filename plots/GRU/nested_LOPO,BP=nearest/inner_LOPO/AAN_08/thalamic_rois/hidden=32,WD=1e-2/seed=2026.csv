@@ -1,0 +1,2 @@
+outer_held_out_participant,roi,hidden,WD,seed,n_validation_segments,segment_pooled_balanced_accuracy
+AAN_08,thalamic_rois,32,0.01,2026,2104,0.6880139598266408

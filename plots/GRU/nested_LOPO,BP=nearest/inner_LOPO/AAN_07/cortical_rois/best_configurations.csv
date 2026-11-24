@@ -1,0 +1,10 @@
+rank,outer_held_out_participant,roi,hidden,WD,n_seeds,n_validation_segments,mean_segment_pooled_balanced_accuracy
+1,AAN_07,cortical_rois,64,0.001,10,2154,0.7098234323878538
+2,AAN_07,cortical_rois,64,0.003,10,2154,0.6988789094902366
+3,AAN_07,cortical_rois,32,0.001,10,2154,0.6962280838711423
+4,AAN_07,cortical_rois,16,0.003,10,2154,0.6908505477233218
+5,AAN_07,cortical_rois,32,0.003,10,2154,0.6890108620089614
+6,AAN_07,cortical_rois,64,0.01,10,2154,0.687579166713913
+7,AAN_07,cortical_rois,16,0.001,10,2154,0.6872676896882874
+8,AAN_07,cortical_rois,16,0.01,10,2154,0.6857811740878328
+9,AAN_07,cortical_rois,32,0.01,10,2154,0.6818949508623404

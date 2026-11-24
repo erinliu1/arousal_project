@@ -1,0 +1,10 @@
+rank,outer_held_out_participant,roi,hidden,WD,n_seeds,n_validation_segments,mean_segment_pooled_balanced_accuracy
+1,AAN_07,thalamic_rois,64,0.003,10,2154,0.6657520935948776
+2,AAN_07,thalamic_rois,64,0.001,10,2154,0.6622357438858133
+3,AAN_07,thalamic_rois,16,0.001,10,2154,0.6585837171917699
+4,AAN_07,thalamic_rois,32,0.003,10,2154,0.656462167011347
+5,AAN_07,thalamic_rois,32,0.001,10,2154,0.6557221146943712
+6,AAN_07,thalamic_rois,16,0.003,10,2154,0.6549778320117439
+7,AAN_07,thalamic_rois,32,0.01,10,2154,0.6490612513334375
+8,AAN_07,thalamic_rois,16,0.01,10,2154,0.6372087262412633
+9,AAN_07,thalamic_rois,64,0.01,10,2154,0.629415040737985

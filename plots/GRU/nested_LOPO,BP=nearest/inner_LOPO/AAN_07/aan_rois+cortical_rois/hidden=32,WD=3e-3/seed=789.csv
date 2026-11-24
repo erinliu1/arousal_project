@@ -1,0 +1,2 @@
+outer_held_out_participant,roi,hidden,WD,seed,n_validation_segments,segment_pooled_balanced_accuracy
+AAN_07,aan_rois+cortical_rois,32,0.003,789,2154,0.6419723796373749
