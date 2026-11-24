@@ -415,8 +415,115 @@ def summarize_outer(rois=None):
     return outputs
 
 
+def visualize_results():
+    """Plot seed means and participant-bootstrap intervals for completed ROI selections."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    root = ROOT
+    preferred_order = (
+        "all_rois",
+        "aan_rois",
+        "cortical_rois",
+        "thalamic_rois",
+        "aan_rois+cortical_rois",
+        "aan_rois+thalamic_rois",
+        "thalamic_rois+cortical_rois",
+    )
+    display_names = {
+        "all_rois": "All ROIs",
+        "aan_rois": "AAN",
+        "cortical_rois": "Cortical",
+        "thalamic_rois": "Thalamic",
+        "aan_rois+cortical_rois": "AAN + Cortical",
+        "aan_rois+thalamic_rois": "AAN + Thalamic",
+        "thalamic_rois+cortical_rois": "Cortical + Thalamic",
+    }
+    metric_specs = (
+        ("segment_weighted_balanced_accuracy", "Balanced Accuracy", "ci_2.5", "ci_97.5"),
+        ("responsive_recall", "Responsive Recall",
+         "responsive_recall_ci_2.5", "responsive_recall_ci_97.5"),
+        ("nonresponsive_recall", "Non-Responsive Recall",
+         "nonresponsive_recall_ci_2.5", "nonresponsive_recall_ci_97.5"),
+    )
+    colors = ("tab:blue", "tab:green", "#df65a0")
+
+    discovered = []
+    for roi_folder in (root / "evaluation").iterdir() if (root / "evaluation").exists() else ():
+        if not roi_folder.is_dir():
+            continue
+        evaluation = roi_folder
+        mean_std_path = evaluation / "seed_mean_std.csv"
+        bootstrap_path = evaluation / "bootstrap_ci.csv"
+        if not mean_std_path.exists() or not bootstrap_path.exists():
+            continue
+        mean_std = pd.read_csv(mean_std_path)
+        bootstrap = pd.read_csv(bootstrap_path)
+        if "statistic" not in mean_std or "mean" not in set(mean_std["statistic"]):
+            raise ValueError(f"Missing mean row in {mean_std_path}")
+        if len(bootstrap) != 1:
+            raise ValueError(f"Expected one bootstrap row in {bootstrap_path}, found {len(bootstrap)}")
+        discovered.append((
+            roi_folder.name,
+            mean_std.set_index("statistic").loc["mean"],
+            bootstrap.iloc[0],
+        ))
+    if not discovered:
+        raise FileNotFoundError(
+            f"No completed seed_mean_std.csv/bootstrap_ci.csv pairs found under {root}")
+
+    order = {name: index for index, name in enumerate(preferred_order)}
+    discovered.sort(key=lambda item: (
+        -float(item[1]["segment_weighted_balanced_accuracy"]),
+        order.get(item[0], len(order)),
+        item[0],
+    ))
+    positions = np.arange(len(discovered))
+    labels = [display_names.get(name, name.replace("_rois", "").replace("+", " + ").title())
+              for name, _, _ in discovered]
+
+    with plt.rc_context({
+            "font.size": 26, "axes.labelsize": 30, "axes.titlesize": 32,
+            "axes.linewidth": 3, "xtick.labelsize": 26, "ytick.labelsize": 28}):
+        fig, axes = plt.subplots(1, 3, figsize=(26, 9), sharex=True, sharey=True,
+                                 layout="constrained")
+        for ax, (metric, title, lower_column, upper_column), color in zip(
+                axes, metric_specs, colors):
+            points = np.array([float(mean[metric]) for _, mean, _ in discovered])
+            lower = np.array([float(ci[lower_column]) for _, _, ci in discovered])
+            upper = np.array([float(ci[upper_column]) for _, _, ci in discovered])
+            ax.hlines(positions, lower, upper, color=color, linewidth=7)
+            ax.plot(lower, positions, "|", color=color, markersize=24, markeredgewidth=5)
+            ax.plot(upper, positions, "|", color=color, markersize=24, markeredgewidth=5)
+            ax.plot(points, positions, "o", color=color, markersize=19, zorder=3)
+            if metric == "segment_weighted_balanced_accuracy":
+                ax.axvline(0.5, color="0.4", linestyle=":", linewidth=4.5, zorder=0)
+            ax.set_title(title, pad=20)
+            ax.set_xlabel(title)
+            ax.set_yticks(positions, labels)
+            ax.set_ylim(len(discovered) - 0.5, -0.5)
+            ax.set_xlim(0, 1)
+            ax.set_xticks(np.linspace(0, 1, 6))
+            from matplotlib.ticker import FuncFormatter
+            ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+            ax.grid(axis="both", alpha=0.25, linewidth=2.5)
+            ax.tick_params(axis="both", width=3, length=10)
+            ax.set_axisbelow(True)
+            ax.spines[["top", "right"]].set_visible(False)
+        fig.suptitle("Nested LOPO GRU Performance by ROI Groups", fontsize=32)
+
+    root.mkdir(parents=True, exist_ok=True)
+    output = root / "nested_lopo_roi_comparison.png"
+    fig.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {output}", flush=True)
+    return output
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--visualize", action="store_true", help="Plot current ROI-group seed means and participant-bootstrap CIs")
     parser.add_argument("--run_inner", action="store_true",
                         help="Enable inner training (disabled when omitted)")
     parser.add_argument("--summarize", action="store_true",
@@ -434,10 +541,14 @@ def main(argv=None):
                         help="Run HD16/32 x all three WDs for the five ROI groups excluding all_rois and cortical+thalamic")
     parser.add_argument("--weight-decay", type=float, choices=WEIGHT_DECAYS)
     args = parser.parse_args(argv)
-    if sum((args.run_inner, args.eval, args.get_best_starting_config, args.summarize)) > 1:
+    if sum((args.run_inner, args.eval, args.get_best_starting_config, args.summarize, args.visualize)) > 1:
         parser.error("Choose only one of --run_inner, --eval, --summarize, or --get_best_starting_config")
     if args.remaining_roi_groups and (not args.run_inner or args.rois is not None or args.weight_decay is not None):
         parser.error("--remaining-roi-groups requires --run_inner and cannot use --rois or --weight-decay")
+    if args.visualize:
+        if any(value is not None for value in (args.seed,args.rois,args.outer_held_out_participant,args.hidden_sizes,args.weight_decay)):
+            parser.error("--visualize runs standalone")
+        return visualize_results()
     if args.hidden_sizes is not None and not args.run_inner:
         parser.error("--hidden-sizes is only for --run_inner")
     if args.summarize:
