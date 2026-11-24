@@ -57,15 +57,18 @@ def parse_args(argv=None):
     parser.add_argument("--C", "--c", dest="c", type=float, default=0.01,
                         help="Fixed inverse L2 strength used in every fold (default: 0.01).")
     parser.add_argument("--max-iter", type=int, default=5000)
-    parser.add_argument("--features", choices=("mean", "mean_sd_slope"),
-                        default="mean_sd_slope", help="Features per ROI (default: mean, SD, slope).")
+    parser.add_argument("--features", choices=("mean", "mean_sd", "mean_sd_slope"),
+                        default="mean_sd_slope", help="Features per ROI: mean, mean+SD, or mean+SD+slope (default).")
     parser.add_argument("--individual-rois", action="store_true",
                         help="Run each selected ROI separately and write plots/LR/results/roi_summary.csv.")
     from deterministic_nested_lopo import add_arguments, validate_arguments
     add_arguments(parser)
     parser.add_argument("--summarize", action="store_true")
+    parser.add_argument("--save-betas", action="store_true", help="Refit saved nested outer configurations and export verified LR coefficients")
     args = parser.parse_args(argv)
     validate_arguments(parser, args)
+    if args.save_betas and (args.run_inner or args.eval or args.get_best_starting_config or args.summarize or args.individual_rois):
+        parser.error("--save-betas is standalone, with optional --rois/--features")
     if args.individual_rois and (args.run_inner or args.eval or args.get_best_starting_config or args.summarize):
         parser.error("Nested modes use --rois; omit --individual-rois")
     if args.max_iter < 1 or args.segment_length < 2 or args.segment_stride < 1:
@@ -80,7 +83,7 @@ def parse_args(argv=None):
 
 
 def extract_features(X, rois, feature_set="mean_sd_slope"):
-    """Per ROI: temporal mean, population SD, and OLS slope per TR."""
+    """Selected per-ROI temporal summaries: mean, population SD, optionally OLS slope."""
     if X.ndim != 3 or X.shape[1] < 2 or X.shape[2] != len(rois):
         raise ValueError("Expected X shaped (segments, >=2 TRs, selected ROIs).")
     if not np.isfinite(X).all():
@@ -88,6 +91,9 @@ def extract_features(X, rois, feature_set="mean_sd_slope"):
     X = np.asarray(X, dtype=np.float64)
     if feature_set == "mean":
         return X.mean(axis=1), [f"{roi}__mean" for roi in rois]
+    if feature_set == "mean_sd":
+        return np.concatenate([X.mean(axis=1), X.std(axis=1)], axis=1), [
+            f"{roi}__{stat}" for stat in ("mean", "sd") for roi in rois]
     time = np.arange(X.shape[1], dtype=np.float64)
     time -= time.mean()
     slopes = np.einsum("str,t->sr", X, time) / np.dot(time, time)
@@ -178,11 +184,11 @@ def run_analysis(args, data=None, participant_rows=None):
     output = (Path("plots/LR/segments") / get_segment_dir_name(args) / args.roi_label
               / args.analysis.upper() / f"C={args.c:g}")
     # Preserve existing multi-feature results when fitting a mean-only model.
-    if args.features == "mean":
-        output = output / "features=mean"
+    if args.features != "mean_sd_slope":
+        output = output / f"features={args.features}"
     output.mkdir(parents=True, exist_ok=True)
     settings = vars(args).copy()
-    settings.update(features=["mean"] if args.features == "mean" else ["mean", "sd", "slope_per_TR"],
+    settings.update(features={"mean":["mean"], "mean_sd":["mean","sd"], "mean_sd_slope":["mean","sd","slope_per_TR"]}[args.features],
                     regularization="L2", solver="lbfgs", threshold=0.5,
                     weighting="equal participants, then available classes",
                     regularization_selection="fixed C; no inner cross-validation",
@@ -278,8 +284,56 @@ def nested_runner(args):
     return NestedLOPO(root, args.roi_label, args, loader, fold)
 
 
+def save_nested_betas(args):
+    """Recover outer-fold betas using the saved selected C, verifying original predictions."""
+    from deterministic_nested_lopo import PARTICIPANTS
+    runner = nested_runner(args)
+    folder = runner.root / "outer_LOPO" / runner.label
+    folds = pd.read_csv(folder / "fold_results.csv")
+    predictions = pd.read_csv(folder / "predictions.csv")
+    if (len(folds) != 20 or folds.outer_held_out_participant.duplicated().any()
+            or set(folds.outer_held_out_participant) != set(PARTICIPANTS)):
+        raise ValueError("Expected exactly 20 saved outer folds")
+    X,y,metadata,participants = runner.data()
+    stats = {"mean":("mean",), "mean_sd":("mean","sd"), "mean_sd_slope":("mean","sd","slope")}[args.features]
+    names = [f"{roi}__{stat}" for stat in stats for roi in args.rois]
+    if len(names) != X.shape[1]: raise ValueError("Feature-name alignment mismatch")
+    rows=[]
+    keys=["participant","run","segment_start_TR","segment_end_TR_exclusive"]
+    for outer in PARTICIPANTS:
+        selected=folds.loc[folds.outer_held_out_participant.eq(outer)].iloc[0]
+        train,test=np.flatnonzero(participants != outer),np.flatnonzero(participants == outer)
+        scaler,model=fit_model(X[train],y[train],participants[train],float(selected.C),args)
+        probability=model.predict_proba(scaler.transform(X[test]))[:,1]
+        original=predictions.loc[predictions.outer_held_out_participant.eq(outer)].set_index(keys)
+        index=pd.MultiIndex.from_frame(metadata.iloc[test][keys])
+        original=original.loc[index]
+        if (not np.array_equal(original.label_binary.to_numpy(),y[test])
+                or not np.allclose(original.probability_nonresponsive.to_numpy(),probability,atol=1e-9,rtol=1e-7)):
+            raise ValueError(f"Refit differs from saved outer predictions for {outer}; coefficients not exported")
+        for name,beta,mean,scale in zip(names,model.coef_[0],scaler.mean_,scaler.scale_):
+            roi,stat=name.rsplit("__",1)
+            rows.append(dict(outer_held_out_participant=outer,roi=roi,feature_type=stat,feature=name,
+                             C=float(selected.C),coefficient_standardized=float(beta),
+                             scaler_mean=float(mean),scaler_scale=float(scale),intercept=float(model.intercept_[0])))
+        print(f"Verified and recovered coefficients: {outer}",flush=True)
+    frame=pd.DataFrame(rows)
+    summary=frame.groupby(["roi","feature_type","feature"]).coefficient_standardized.agg(
+        mean_beta="mean",std_beta="std",n_outer_folds="size",
+        n_positive=lambda v:int((v>0).sum()),n_negative=lambda v:int((v<0).sum())).reset_index()
+    summary["abs_mean_beta"]=summary.mean_beta.abs()
+    summary=summary.sort_values("abs_mean_beta",ascending=False)
+    frame.to_csv(folder/"coefficients.csv",index=False)
+    summary.to_csv(folder/"coefficient_summary.csv",index=False)
+    print(summary.head(20).to_string(index=False))
+    print(f"Saved coefficients.csv and coefficient_summary.csv to {folder}")
+    return folder
+
+
 def main(argv=None):
     args = parse_args(argv)
+    if args.save_betas:
+        return save_nested_betas(args)
     if args.run_inner or args.eval or args.get_best_starting_config or args.summarize:
         runner = nested_runner(args)
         if args.run_inner: return runner.run_inner(args.outer_held_out_participant)
