@@ -1,0 +1,6 @@
+rank,outer_held_out_participant,roi,C,n_validation_segments,segment_pooled_balanced_accuracy
+1,AAN_17,aan_rois+thalamic_rois,1.0,2367,0.612712677663658
+2,AAN_17,aan_rois+thalamic_rois,10.0,2367,0.6118600217864925
+3,AAN_17,aan_rois+thalamic_rois,0.1,2367,0.6102325189334994
+4,AAN_17,aan_rois+thalamic_rois,0.01,2367,0.5823056074281565
+5,AAN_17,aan_rois+thalamic_rois,0.001,2367,0.5534482311443096

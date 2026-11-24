@@ -1,0 +1,6 @@
+rank,outer_held_out_participant,roi,C,n_validation_segments,segment_pooled_balanced_accuracy
+1,AAN_08,thalamic_rois+cortical_rois,0.01,2104,0.7211423417952583
+2,AAN_08,thalamic_rois+cortical_rois,0.1,2104,0.7149938008537833
+3,AAN_08,thalamic_rois+cortical_rois,1.0,2104,0.6951926795854705
+4,AAN_08,thalamic_rois+cortical_rois,10.0,2104,0.690919244824707
+5,AAN_08,thalamic_rois+cortical_rois,0.001,2104,0.6692294623912438

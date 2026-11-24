@@ -1,0 +1,14 @@
+{
+  "BP": "nearest",
+  "c_grid": [
+    0.001,
+    0.01,
+    0.1,
+    1.0,
+    10.0
+  ],
+  "fd_threshold": null,
+  "features": "mean_sd",
+  "max_iter": 5000,
+  "roi": "thalamic_rois"
+}

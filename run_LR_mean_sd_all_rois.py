@@ -30,10 +30,19 @@ def main():
     parser.add_argument("--stage", choices=("all", "inner", "eval", "summary"), default="all")
     parser.add_argument("--task-id", type=int)
     args = parser.parse_args()
-    limit = 120 if args.stage == "inner" else 7
+    limit = len(ROI_GROUPS) * len(PARTICIPANTS) if args.stage == "inner" else len(ROI_GROUPS)
     if args.task_id is not None and (args.stage == "all" or not 0 <= args.task_id < limit):
         parser.error("--task-id requires inner (0..119), eval or summary (0..5)")
-    if args.stage in ("all", "inner"):
+    if args.stage == "all":
+        for index, group in enumerate(ROI_GROUPS, 1):
+            print(f"\nROI group {index}/{len(ROI_GROUPS)}: {'+'.join(group)}", flush=True)
+            for outer in PARTICIPANTS:
+                run(group, "--run_inner", "--outer-held-out-participant", outer)
+            run(group, "--eval")
+            run(group, "--summarize")
+        print("Completed inner CV, outer evaluation, and summaries for all remaining ROI groups.", flush=True)
+        return
+    if args.stage == "inner":
         tasks = range(120) if args.task_id is None else (args.task_id,)
         for task in tasks:
             group, outer = divmod(task, len(PARTICIPANTS))

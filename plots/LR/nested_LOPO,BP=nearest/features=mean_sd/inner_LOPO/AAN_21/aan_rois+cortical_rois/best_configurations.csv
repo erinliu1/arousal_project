@@ -1,0 +1,6 @@
+rank,outer_held_out_participant,roi,C,n_validation_segments,segment_pooled_balanced_accuracy
+1,AAN_21,aan_rois+cortical_rois,0.01,2342,0.6847172214573993
+2,AAN_21,aan_rois+cortical_rois,0.1,2342,0.6696641839340134
+3,AAN_21,aan_rois+cortical_rois,1.0,2342,0.6585433654558932
+4,AAN_21,aan_rois+cortical_rois,10.0,2342,0.6562724299010437
+5,AAN_21,aan_rois+cortical_rois,0.001,2342,0.6413929483332745

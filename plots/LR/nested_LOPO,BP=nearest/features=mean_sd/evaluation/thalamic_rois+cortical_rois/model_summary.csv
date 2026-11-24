@@ -1,0 +1,2 @@
+pooled_test_accuracy,segment_weighted_balanced_accuracy,responsive_recall,nonresponsive_recall,pooled_train_accuracy
+0.698464025869038,0.7076363515467858,0.7776744186046511,0.6375982844889206,0.8100455261030507
